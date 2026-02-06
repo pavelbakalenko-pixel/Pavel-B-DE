@@ -10,6 +10,9 @@ const resultEl = document.getElementById("result");
 const statusEl = document.getElementById("status");
 const errorEl = document.getElementById("error");
 
+// Google Apps Script URL для логирования
+const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzBkegL2WcBtQpgDzqCfxmdA4So9cBQxOscNVd_iSLyNj-zEo2lEH_l7MnXPnhhFYiGJw/exec";
+
 document.addEventListener("DOMContentLoaded", async () => {
   clearError();
   setStatus("Loading reviews and sentiment model…");
@@ -97,6 +100,58 @@ async function initModel() {
 }
 
 /**
+ * Логирует данные в Google Sheets
+ */
+async function logToGoogleSheets(data) {
+  try {
+    console.log("Logging data to Google Sheets:", data);
+    
+    // Создаем FormData для отправки
+    const formData = new URLSearchParams();
+    formData.append("timestamp", data.timestamp);
+    formData.append("review", data.review);
+    formData.append("sentiment", data.sentiment);
+    formData.append("confidence", data.confidence);
+    formData.append("meta", JSON.stringify(data.meta));
+    
+    // Отправляем данные через POST запрос
+    const response = await fetch(GOOGLE_SCRIPT_URL, {
+      method: "POST",
+      mode: "no-cors", // Используем no-cors для обхода CORS ограничений
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: formData.toString()
+    });
+    
+    console.log("Data sent to Google Sheets (no-cors mode)");
+    return { success: true };
+    
+  } catch (error) {
+    console.warn("Failed to log to Google Sheets:", error);
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Собирает мета-данные о клиенте
+ */
+function collectMetaData() {
+  return {
+    userAgent: navigator.userAgent,
+    language: navigator.language,
+    platform: navigator.platform,
+    screenWidth: window.screen.width,
+    screenHeight: window.screen.height,
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    url: window.location.href,
+    reviewsCount: reviews.length,
+    modelReady: !!sentimentPipeline,
+    timestamp: new Date().toISOString()
+  };
+}
+
+/**
  * Handles the analyze button click.
  */
 async function onAnalyzeClick() {
@@ -122,8 +177,33 @@ async function onAnalyzeClick() {
   try {
     const output = await sentimentPipeline(review);
     const normalized = normalizeOutput(output);
+    
+    // Обновляем UI
     updateResult(normalized);
-    setStatus("Analysis complete.");
+    
+    // Собираем данные для логирования
+    const metaData = collectMetaData();
+    const logData = {
+      timestamp: new Date().toISOString(),
+      review: review.substring(0, 1000), // Ограничиваем длину
+      sentiment: normalized.label,
+      confidence: (normalized.score * 100).toFixed(1),
+      meta: metaData
+    };
+    
+    // Логируем в Google Sheets (асинхронно, не блокируем UI)
+    setTimeout(() => {
+      logToGoogleSheets(logData).then(result => {
+        if (result.success) {
+          console.log("✓ Data successfully logged to Google Sheets");
+          setStatus("Analysis complete. Data logged.");
+        } else {
+          console.warn("⚠ Data logging failed (but analysis worked)");
+          setStatus("Analysis complete. Logging failed.");
+        }
+      });
+    }, 0);
+    
   } catch (err) {
     handleError(err, "Sentiment analysis failed.");
   } finally {
