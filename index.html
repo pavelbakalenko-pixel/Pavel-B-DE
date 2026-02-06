@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Client-Side Sentiment Analyzer</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <!-- Font Awesome for sentiment icons -->
+  <link
+    rel="stylesheet"
+    href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"
+  />
+
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #f5f7fa;
+      margin: 0;
+      padding: 20px;
+    }
+
+    h1 {
+      text-align: center;
+    }
+
+    .container {
+      max-width: 800px;
+      margin: 0 auto;
+      background: #ffffff;
+      padding: 20px;
+      border-radius: 6px;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+    }
+
+    button {
+      padding: 10px 16px;
+      font-size: 16px;
+      cursor: pointer;
+      margin-bottom: 16px;
+    }
+
+    button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    .review-box {
+      border: 1px solid #ddd;
+      padding: 12px;
+      border-radius: 4px;
+      min-height: 80px;
+      margin-bottom: 16px;
+      background: #fafafa;
+    }
+
+    .result {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 18px;
+      margin-top: 12px;
+    }
+
+    .result.positive {
+      color: #2e7d32;
+    }
+
+    .result.negative {
+      color: #c62828;
+    }
+
+    .result.neutral {
+      color: #6d6d6d;
+    }
+
+    .status {
+      margin-top: 12px;
+      font-size: 14px;
+      color: #444;
+    }
+
+    .error {
+      margin-top: 12px;
+      padding: 10px;
+      background: #fdecea;
+      color: #b71c1c;
+      border: 1px solid #f5c6cb;
+      border-radius: 4px;
+      display: none;
+    }
+
+    .loading {
+      font-style: italic;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Random Review Sentiment Analyzer</h1>
+
+    <button id="analyzeBtn">Analyze random review</button>
+
+    <div id="reviewBox" class="review-box">
+      Click the button to analyze a random review.
+    </div>
+
+    <div id="result" class="result" style="display: none;"></div>
+
+    <div id="status" class="status"></div>
+
+    <div id="error" class="error"></div>
+  </div>
+
+  <!-- Papa Parse for TSV parsing -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+
+  <!-- Main application script -->
+  <script type="module" src="app.js"></script>
+</body>
+</html>
