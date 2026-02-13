@@ -1,299 +1,241 @@
+// app.js — complete browser‑side sentiment analysis with Transformers.js
 import { pipeline } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.6/dist/transformers.min.js";
 
-let reviews = [];
-let sentimentPipeline = null;
+// ==================== DOM elements ====================
+const statusIcon = document.getElementById('statusIcon');
+const statusMsg = document.getElementById('statusMessage');
+const reviewDisplay = document.getElementById('reviewDisplay');
+const resultArea = document.getElementById('resultArea');
+const resultIcon = document.getElementById('resultIcon');
+const sentimentLabel = document.getElementById('sentimentLabel');
+const confidenceText = document.getElementById('confidenceText');
+const analyzeBtn = document.getElementById('analyzeBtn');
+const errorBox = document.getElementById('errorBox');
+const errorText = document.getElementById('errorText');
 
-// DOM elements
-const analyzeBtn = document.getElementById("analyzeBtn");
-const reviewBox = document.getElementById("reviewBox");
-const resultEl = document.getElementById("result");
-const statusEl = document.getElementById("status");
-const errorEl = document.getElementById("error");
+// ==================== state ====================
+let reviews = [];               // cleaned review strings
+let sentimentPipeline = null;    // pipeline instance
+let modelReady = false;
+let tsvLoaded = false;
 
-// Google Apps Script URL для логирования
-const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzBkegL2WcBtQpgDzqCfxmdA4So9cBQxOscNVd_iSLyNj-zEo2lEH_l7MnXPnhhFYiGJw/exec";
-
-document.addEventListener("DOMContentLoaded", async () => {
-  clearError();
-  setStatus("Loading reviews and sentiment model…");
-
-  try {
-    await loadReviews();
-    setStatus("Reviews loaded. Loading sentiment model…");
-    await initModel();
-    setStatus("Sentiment model ready.");
-  } catch (err) {
-    handleError(err, "Initialization failed. Please check the console for details.");
-  }
-
-  analyzeBtn.addEventListener("click", onAnalyzeClick);
-});
-
-/**
- * Fetches and parses the TSV file containing reviews.
- */
-async function loadReviews() {
-  let response;
-  try {
-    response = await fetch("reviews_test.tsv");
-  } catch (err) {
-    throw new Error("Network error while loading the TSV file.");
-  }
-
-  if (!response.ok) {
-    throw new Error(`Failed to load TSV file (status ${response.status}).`);
-  }
-
-  const tsvText = await response.text();
-
-  return new Promise((resolve, reject) => {
-    Papa.parse(tsvText, {
-      header: true,
-      delimiter: "\t",
-      skipEmptyLines: true,
-      complete: (results) => {
-        try {
-          if (!results.data || !Array.isArray(results.data)) {
-            throw new Error("Parsed data is invalid.");
-          }
-
-          // Attempt to extract the "text" column; fallback to first column if needed
-          reviews = results.data
-            .map((row) => {
-              if (typeof row.text === "string") {
-                return row.text.trim();
-              }
-              const firstKey = Object.keys(row)[0];
-              return typeof row[firstKey] === "string" ? row[firstKey].trim() : null;
-            })
-            .filter((text) => typeof text === "string" && text.length > 0);
-
-          if (reviews.length === 0) {
-            throw new Error("No valid review texts found in TSV.");
-          }
-
-          resolve();
-        } catch (err) {
-          reject(err);
-        }
-      },
-      error: (err) => {
-        reject(new Error(`TSV parsing error: ${err.message}`));
-      },
-    });
-  });
+// ==================== UI helpers ====================
+function showError(msg, hideAfter = 8000) {
+    console.error('[error]', msg);
+    errorText.textContent = msg;
+    errorBox.classList.remove('hidden');
+    if (hideAfter) {
+        setTimeout(() => {
+            errorBox.classList.add('hidden');
+        }, hideAfter);
+    }
 }
 
-/**
- * Initializes the Transformers.js sentiment analysis pipeline.
- */
-async function initModel() {
-  try {
-    sentimentPipeline = await pipeline(
-      "text-classification",
-      "Xenova/distilbert-base-uncased-finetuned-sst-2-english"
-    );
-  } catch (err) {
-    console.error(err);
-    throw new Error("Failed to load sentiment model.");
-  }
-}
-
-/**
- * Логирует данные в Google Sheets
- */
-async function logToGoogleSheets(data) {
-  try {
-    console.log("Logging data to Google Sheets:", data);
-    
-    // Создаем FormData для отправки
-    const formData = new URLSearchParams();
-    formData.append("timestamp", data.timestamp);
-    formData.append("review", data.review);
-    formData.append("sentiment", data.sentiment);
-    formData.append("confidence", data.confidence);
-    formData.append("meta", JSON.stringify(data.meta));
-    
-    // Отправляем данные через POST запрос
-    const response = await fetch(GOOGLE_SCRIPT_URL, {
-      method: "POST",
-      mode: "no-cors", // Используем no-cors для обхода CORS ограничений
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-      body: formData.toString()
-    });
-    
-    console.log("Data sent to Google Sheets (no-cors mode)");
-    return { success: true };
-    
-  } catch (error) {
-    console.warn("Failed to log to Google Sheets:", error);
-    return { success: false, error: error.message };
-  }
-}
-
-/**
- * Собирает мета-данные о клиенте
- */
-function collectMetaData() {
-  return {
-    userAgent: navigator.userAgent,
-    language: navigator.language,
-    platform: navigator.platform,
-    screenWidth: window.screen.width,
-    screenHeight: window.screen.height,
-    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-    url: window.location.href,
-    reviewsCount: reviews.length,
-    modelReady: !!sentimentPipeline,
-    timestamp: new Date().toISOString()
-  };
-}
-
-/**
- * Handles the analyze button click.
- */
-async function onAnalyzeClick() {
-  clearError();
-  resultEl.style.display = "none";
-
-  if (!reviews || reviews.length === 0) {
-    showError("No reviews are loaded. Cannot run analysis.");
-    return;
-  }
-
-  if (!sentimentPipeline) {
-    showError("Sentiment model is not ready yet.");
-    return;
-  }
-
-  const review = getRandomReview();
-  reviewBox.textContent = review;
-
-  analyzeBtn.disabled = true;
-  setStatus("Analyzing sentiment…");
-
-  try {
-    const output = await sentimentPipeline(review);
-    const normalized = normalizeOutput(output);
-    
-    // Обновляем UI
-    updateResult(normalized);
-    
-    // Собираем данные для логирования
-    const metaData = collectMetaData();
-    const logData = {
-      timestamp: new Date().toISOString(),
-      review: review.substring(0, 1000), // Ограничиваем длину
-      sentiment: normalized.label,
-      confidence: (normalized.score * 100).toFixed(1),
-      meta: metaData
-    };
-    
-    // Логируем в Google Sheets (асинхронно, не блокируем UI)
-    setTimeout(() => {
-      logToGoogleSheets(logData).then(result => {
-        if (result.success) {
-          console.log("✓ Data successfully logged to Google Sheets");
-          setStatus("Analysis complete. Data logged.");
-        } else {
-          console.warn("⚠ Data logging failed (but analysis worked)");
-          setStatus("Analysis complete. Logging failed.");
-        }
-      });
-    }, 0);
-    
-  } catch (err) {
-    handleError(err, "Sentiment analysis failed.");
-  } finally {
-    analyzeBtn.disabled = false;
-  }
-}
-
-/**
- * Selects a random review from the loaded list.
- */
-function getRandomReview() {
-  const index = Math.floor(Math.random() * reviews.length);
-  return reviews[index];
-}
-
-/**
- * Normalizes the pipeline output into a single { label, score } object.
- */
-function normalizeOutput(output) {
-  if (!Array.isArray(output) || output.length === 0) {
-    throw new Error("Invalid model output.");
-  }
-
-  const top = output[0];
-  if (typeof top.label !== "string" || typeof top.score !== "number") {
-    throw new Error("Unexpected sentiment output format.");
-  }
-
-  return {
-    label: top.label.toUpperCase(),
-    score: top.score,
-  };
-}
-
-/**
- * Maps the sentiment to positive, negative, or neutral and updates the UI.
- */
-function updateResult({ label, score }) {
-  let sentimentClass = "neutral";
-  let iconClass = "fa-question-circle";
-  let displayLabel = "NEUTRAL";
-
-  if (label === "POSITIVE" && score > 0.5) {
-    sentimentClass = "positive";
-    iconClass = "fa-thumbs-up";
-    displayLabel = "POSITIVE";
-  } else if (label === "NEGATIVE" && score > 0.5) {
-    sentimentClass = "negative";
-    iconClass = "fa-thumbs-down";
-    displayLabel = "NEGATIVE";
-  }
-
-  const confidence = (score * 100).toFixed(1);
-
-  resultEl.className = `result ${sentimentClass}`;
-  resultEl.innerHTML = `
-    <i class="fa ${iconClass}"></i>
-    <span>${displayLabel} (${confidence}% confidence)</span>
-  `;
-  resultEl.style.display = "flex";
-}
-
-/**
- * Updates the status text.
- */
-function setStatus(message) {
-  statusEl.textContent = message;
-}
-
-/**
- * Displays a user-friendly error message.
- */
-function showError(message) {
-  errorEl.textContent = message;
-  errorEl.style.display = "block";
-}
-
-/**
- * Clears any visible error message.
- */
 function clearError() {
-  errorEl.textContent = "";
-  errorEl.style.display = "none";
+    errorBox.classList.add('hidden');
+    errorText.textContent = '';
 }
 
-/**
- * Logs an error and shows a user-friendly message.
- */
-function handleError(err, userMessage) {
-  console.error(err);
-  showError(userMessage);
-  setStatus("");
+function setStatus(icon, message, isReady = false, isLoading = false, isError = false) {
+    statusMsg.textContent = message;
+    statusIcon.innerHTML = icon;
+    statusIcon.className = 'status-icon';
+    if (isReady) statusIcon.classList.add('ready');
+    else if (isError) statusIcon.classList.add('error');
+    else if (isLoading) statusIcon.classList.add('loading');
 }
+
+function updateResultUI(sentiment, confidence) {
+    // remove previous color classes
+    resultArea.classList.remove('positive', 'negative', 'neutral');
+
+    let iconHtml = '';
+    let label = '';
+    let confPercent = (confidence * 100).toFixed(1);
+
+    if (sentiment === 'positive') {
+        resultArea.classList.add('positive');
+        iconHtml = '<i class="fa-solid fa-thumbs-up" style="color: #16a34a;"></i>';
+        label = `POSITIVE (${confPercent}% confidence)`;
+    } else if (sentiment === 'negative') {
+        resultArea.classList.add('negative');
+        iconHtml = '<i class="fa-solid fa-thumbs-down" style="color: #dc2626;"></i>';
+        label = `NEGATIVE (${confPercent}% confidence)`;
+    } else {
+        resultArea.classList.add('neutral');
+        iconHtml = '<i class="fa-solid fa-question-circle" style="color: #6b7280;"></i>';
+        label = `NEUTRAL (${confPercent}% confidence)`;
+    }
+
+    resultIcon.innerHTML = iconHtml;
+    sentimentLabel.textContent = label.split('(')[0].trim();  // just POSITIVE / NEGATIVE / NEUTRAL
+    confidenceText.textContent = `(${confPercent}% confidence)`;
+}
+
+function setLoadingAnalysis(isLoading) {
+    if (isLoading) {
+        analyzeBtn.disabled = true;
+        analyzeBtn.innerHTML = '<span class="loading-spinner"></span> analyzing…';
+    } else {
+        analyzeBtn.disabled = (!modelReady || !tsvLoaded || reviews.length === 0);
+        analyzeBtn.innerHTML = '<i class="fa-solid fa-shuffle"></i> analyze random review';
+    }
+}
+
+// ==================== TSV loading ====================
+async function loadReviewsTSV() {
+    try {
+        setStatus('⏳', '📦 loading reviews_test.tsv ...', false, true);
+        const response = await fetch('reviews_test.tsv');
+        if (!response.ok) throw new Error(`HTTP ${response.status} — cannot fetch TSV`);
+
+        const tsvText = await response.text();
+        
+        // Papa Parse with tab delimiter, header row assumed
+        Papa.parse(tsvText, {
+            header: true,
+            delimiter: '\t',
+            skipEmptyLines: true,
+            complete: (result) => {
+                try {
+                    if (result.errors && result.errors.length) {
+                        console.warn('PapaParse warnings:', result.errors);
+                    }
+                    // extract 'text' column, filter empty / non‑string
+                    const rawRows = result.data;
+                    const extracted = rawRows
+                        .map(row => row.text?.trim())
+                        .filter(txt => txt && typeof txt === 'string' && txt.length > 0);
+                    
+                    if (extracted.length === 0) throw new Error('No valid reviews in text column');
+                    
+                    reviews = extracted;
+                    tsvLoaded = true;
+                    setStatus('✅', `✅ ${reviews.length} reviews loaded`, true);
+                    enableIfReady();
+                } catch (parseErr) {
+                    handleTsvError(parseErr.message);
+                }
+            },
+            error: (parseError) => {
+                handleTsvError(parseError.message);
+            }
+        });
+    } catch (netErr) {
+        handleTsvError(netErr.message);
+    }
+}
+
+function handleTsvError(msg) {
+    tsvLoaded = false;
+    reviews = [];
+    setStatus('⚠️', '❌ TSV error', false, false, true);
+    showError(`Failed to load reviews: ${msg}`, 10000);
+    enableIfReady();
+}
+
+// ==================== model initialization ====================
+async function initModel() {
+    try {
+        setStatus('🧠', '⏳ loading sentiment model (first time may take a moment) …', false, true);
+        // create pipeline — this downloads and caches in browser
+        sentimentPipeline = await pipeline(
+            'text-classification', 
+            'Xenova/distilbert-base-uncased-finetuned-sst-2-english'
+        );
+        modelReady = true;
+        setStatus('✅', '✅ model ready — distilbert‑sst2', true);
+        enableIfReady();
+    } catch (modelErr) {
+        console.error('Model init error:', modelErr);
+        modelReady = false;
+        sentimentPipeline = null;
+        setStatus('🔥', '❌ model failed', false, false, true);
+        showError(`Model load error: ${modelErr.message || 'unknown'}. Check console.`, 0);
+        enableIfReady();
+    }
+}
+
+function enableIfReady() {
+    const ready = modelReady && tsvLoaded && reviews.length > 0;
+    analyzeBtn.disabled = !ready;
+    if (ready) {
+        // small visual feedback
+        statusMsg.textContent += ' — ready to analyze';
+    }
+}
+
+// ==================== sentiment analysis ====================
+async function analyzeRandomReview() {
+    clearError();
+
+    if (!modelReady || !sentimentPipeline) {
+        showError('Model not ready — please wait or reload.', 4000);
+        return;
+    }
+    if (!tsvLoaded || reviews.length === 0) {
+        showError('No reviews loaded — check TSV file.', 4000);
+        return;
+    }
+
+    // pick random review
+    const randomIndex = Math.floor(Math.random() * reviews.length);
+    const selectedReview = reviews[randomIndex];
+    reviewDisplay.textContent = selectedReview;
+
+    // disable button, show loading on button
+    setLoadingAnalysis(true);
+
+    try {
+        // run inference
+        const result = await sentimentPipeline(selectedReview);
+        // expected output: [{ label: "POSITIVE" or "NEGATIVE", score: number }]
+        if (!Array.isArray(result) || result.length === 0) {
+            throw new Error('Unexpected model output format');
+        }
+
+        const top = result[0];
+        let rawLabel = top.label.toUpperCase();      // "POSITIVE" / "NEGATIVE"
+        let rawScore = top.score;
+
+        // map to POSITIVE / NEGATIVE / NEUTRAL according to spec
+        let finalSentiment = 'neutral';
+        if (rawLabel.includes('POSITIVE') && rawScore > 0.5) {
+            finalSentiment = 'positive';
+        } else if (rawLabel.includes('NEGATIVE') && rawScore > 0.5) {
+            finalSentiment = 'negative';
+        } else {
+            finalSentiment = 'neutral';
+        }
+
+        // neutral edge: we keep rawScore for confidence, but sentiment = neutral
+        // confidence displayed always as rawScore percentage.
+        updateResultUI(finalSentiment, rawScore);
+
+    } catch (inferErr) {
+        console.error('inference error:', inferErr);
+        showError(`Analysis failed: ${inferErr.message}`, 6000);
+        // reset result area to "waiting"
+        resultIcon.innerHTML = '<i class="fa-regular fa-circle-question"></i>';
+        sentimentLabel.textContent = 'error';
+        confidenceText.textContent = '—';
+        resultArea.classList.remove('positive', 'negative', 'neutral');
+    } finally {
+        setLoadingAnalysis(false);
+    }
+}
+
+// ==================== start everything ====================
+window.addEventListener('DOMContentLoaded', async () => {
+    // initial state
+    setStatus('⏳', 'initializing...', false, true);
+    
+    // parallel: load TSV and init model
+    await Promise.allSettled([loadReviewsTSV(), initModel()]);
+    
+    // attach click listener
+    analyzeBtn.addEventListener('click', analyzeRandomReview);
+    
+    // if after all, still not ready – but status reflects it
+    enableIfReady();
+});
