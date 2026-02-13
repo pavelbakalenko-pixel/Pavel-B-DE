@@ -1,7 +1,7 @@
 import { pipeline } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.6/dist/transformers.min.js";
 
 const GOOGLE_WEBAPP_URL =
-  "https://script.google.com/macros/s/AKfycbzcCA7eCgMPavTxYOBTY71jkSKjR1kIJsQu-Z6zuInNPeswL7NVGwpl2bsIeUn0uGbK/exec";
+  "https://script.google.com/macros/s/AKfycbwDFBamYbprywVtMroSuZRTrhUTEmW9JdXkQ0yLXDFo0eePdx98k_wuffA71EeKFhMS/exec";
 
 // ---------- STATE ----------
 var reviews = [];
@@ -97,6 +97,10 @@ function updateResultUI(bucket, label, score) {
 // ---------- LOGGING ----------
 function sendLogToGoogleSheets(payload) {
   try {
+    // режем, чтобы URL не был огромным
+    payload.review_preview = String(payload.review_preview || "").slice(0, 200);
+    payload.meta = String(payload.meta || "").slice(0, 300);
+
     var img = new Image();
     var encoded = encodeURIComponent(JSON.stringify(payload));
     img.src = GOOGLE_WEBAPP_URL + "?data=" + encoded + "&_=" + Date.now();
@@ -105,19 +109,6 @@ function sendLogToGoogleSheets(payload) {
   }
 }
 
-function logAction(eventName, message, extra) {
-  var payload = {
-    ts: new Date().toISOString(),
-    event: eventName,
-    message: message,
-    url: location.href,
-    userAgent: navigator.userAgent
-  };
-  if (extra && typeof extra === "object") {
-    for (var k in extra) payload[k] = extra[k];
-  }
-  sendLogToGoogleSheets(payload);
-}
 
 // ---------- TSV ----------
 async function loadReviewsTSV() {
