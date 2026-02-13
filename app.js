@@ -19,45 +19,48 @@ let sentimentPipeline = null;    // модель
 let modelReady = false;
 let tsvLoaded = false;
 
-// ==================== константы ====================
-const GOOGLE_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzUzuPcWz2dyoK8_MMDkVLFi4KxZVt0EZ1lK86OSy8_5lNid6yUA9cQ12rhqvqbTo2K/exec';
+// ==================== константа с URL твоего веб-приложения ====================
+const GOOGLE_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbz0jK9iZQbNFbtE7kI4EU1OKC7QOMCGsPmDoj902WEW1kta324tskGFCIzD7s5x70dO/exec';
 
 // ==================== функция отправки лога в Google Sheets ====================
 async function logToGoogleSheet(reviewText, sentimentResult, confidenceScore) {
-  // Формируем мета-информацию (всё, что знает клиент)
-  const metaInfo = {
-    userAgent: navigator.userAgent,
-    language: navigator.language,
-    platform: navigator.platform,
-    screenSize: `${window.innerWidth}x${window.innerHeight}`,
-    timestamp: Date.now(),
-    url: window.location.href
-  };
-
+  // Формируем данные для отправки
   const payload = {
     ts_iso: new Date().toISOString(),                    // колонка 1: временная метка
     review: reviewText,                                    // колонка 2: текст отзыва
-    sentiment: `${sentimentResult} (${(confidenceScore * 100).toFixed(1)}% уверенности)`, // колонка 3: тональность
-    meta: JSON.stringify(metaInfo)                         // колонка 4: вся мета-информация
+    sentiment: `${sentimentResult} (${(confidenceScore * 100).toFixed(1)}%)`, // колонка 3: тональность
+    meta: JSON.stringify({                                 // колонка 4: мета-информация
+      userAgent: navigator.userAgent,
+      url: window.location.href,
+      timestamp: Date.now()
+    })
   };
 
+  console.log('📤 Отправка в Google Sheets:', payload);
+
   try {
-    // Используем navigator.sendBeacon для надёжной отправки даже при закрытии страницы
-    const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
-    navigator.sendBeacon(GOOGLE_SCRIPT_URL, blob);
-    console.log('✅ Лог отправлен в Google Sheets', payload);
-  } catch (error) {
-    console.error('❌ Ошибка отправки лога:', error);
-    // Пробуем запасной вариант через fetch
-    try {
-      await fetch(GOOGLE_SCRIPT_URL, {
-        method: 'POST',
-        mode: 'no-cors',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-    } catch (fetchError) {
-      console.error('❌ И запасной вариант не сработал:', fetchError);
+    // Пробуем отправить через fetch с Content-Type: text/plain (обходит CORS)
+    const response = await fetch(GOOGLE_SCRIPT_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'text/plain;charset=utf-8' // ВАЖНО! Не application/json
+      },
+      body: JSON.stringify(payload)
+    });
+    
+    console.log('✅ Данные успешно отправлены через fetch');
+    
+  } catch (fetchError) {
+    console.error('❌ Fetch не сработал, пробуем sendBeacon:', fetchError);
+    
+    // Запасной вариант через sendBeacon (тоже работает без CORS)
+    const blob = new Blob([JSON.stringify(payload)], { type: 'text/plain' });
+    const sent = navigator.sendBeacon(GOOGLE_SCRIPT_URL, blob);
+    
+    if (sent) {
+      console.log('✅ Данные успешно отправлены через sendBeacon');
+    } else {
+      console.error('❌ sendBeacon тоже не сработал');
     }
   }
 }
