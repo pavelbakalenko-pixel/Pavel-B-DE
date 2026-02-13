@@ -1,17 +1,29 @@
 import { pipeline } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.6/dist/transformers.min.js";
 
+/*
+  ✅ Your Google Apps Script Web App URL (/exec)
+*/
 const GOOGLE_WEBAPP_URL =
-  "https://script.google.com/macros/s/AKfycbwDFBamYbprywVtMroSuZRTrhUTEmW9JdXkQ0yLXDFo0eePdx98k_wuffA71EeKFhMS/exec";
+  "https://script.google.com/macros/s/AKfycbw53018IfMJSKwRpdkntW1eZ5XxbGa4D1Gwaab5A8_JezAVG2A1228A5RdqVPkoe7M_/exec";
 
-// ---------- STATE ----------
+/*
+  ✅ Load TSV from GitHub RAW (not "local")
+  If your branch is "master", replace /main/ with /master/
+*/
+const TSV_URL =
+  "https://raw.githubusercontent.com/pavelbakalenko-pixel/Pavel-B-DE/main/reviews_test.tsv";
+
+// ---------------- STATE ----------------
 var reviews = [];
 var sentimentPipeline = null;
 var modelReady = false;
 var tsvReady = false;
 var isAnalyzing = false;
 
-// ---------- DOM ----------
-function getEl(id) { return document.getElementById(id); }
+// ---------------- DOM ----------------
+function getEl(id) {
+  return document.getElementById(id);
+}
 
 var analyzeBtn = getEl("analyzeBtn");
 var statusEl = getEl("status");
@@ -24,7 +36,7 @@ var sentimentLabel = getEl("sentimentLabel");
 var confidenceText = getEl("confidenceText");
 var resultSubtext = getEl("resultSubtext");
 
-// ---------- UI ----------
+// ---------------- UI ----------------
 function setStatus(message, ready, error) {
   if (statusText) statusText.textContent = message;
 
@@ -49,6 +61,18 @@ function clearError() {
   errorBox.classList.remove("show");
 }
 
+function updateOverallStatus() {
+  if (modelReady && tsvReady) {
+    setStatus("Ready. Click “Analyze random review”.", true, false);
+  } else if (modelReady && !tsvReady) {
+    setStatus("Model ready — waiting for TSV…", false, false);
+  } else if (!modelReady && tsvReady) {
+    setStatus("TSV ready — waiting for model…", false, false);
+  } else {
+    setStatus("Initializing… (loading TSV + model)", false, false);
+  }
+}
+
 function updateButtonState() {
   if (!analyzeBtn) return;
   var enabled = modelReady && tsvReady && reviews.length > 0 && !isAnalyzing;
@@ -57,13 +81,15 @@ function updateButtonState() {
 
 function setAnalyzeButtonLoading(loading) {
   if (!analyzeBtn) return;
+
   isAnalyzing = loading;
 
   if (loading) {
     analyzeBtn.disabled = true;
     analyzeBtn.innerHTML = '<span class="spinner"></span> Analyzing...';
   } else {
-    analyzeBtn.innerHTML = '<i class="fa-solid fa-shuffle"></i> Analyze random review';
+    analyzeBtn.innerHTML =
+      '<i class="fa-solid fa-shuffle"></i> Analyze random review';
     updateButtonState();
   }
 }
@@ -76,17 +102,19 @@ function updateResultUI(bucket, label, score) {
   resultArea.classList.remove("neutral");
 
   var percent = "—";
-  if (typeof score === "number") percent = (score * 100).toFixed(1);
+  if (typeof score === "number" && isFinite(score)) {
+    percent = (score * 100).toFixed(1);
+  }
 
   if (bucket === "positive") {
     resultArea.classList.add("positive");
-    resultIcon.innerHTML = '<i class="fa-solid fa-thumbs-up"></i>';
+    if (resultIcon) resultIcon.innerHTML = '<i class="fa-solid fa-thumbs-up"></i>';
   } else if (bucket === "negative") {
     resultArea.classList.add("negative");
-    resultIcon.innerHTML = '<i class="fa-solid fa-thumbs-down"></i>';
+    if (resultIcon) resultIcon.innerHTML = '<i class="fa-solid fa-thumbs-down"></i>';
   } else {
     resultArea.classList.add("neutral");
-    resultIcon.innerHTML = '<i class="fa-solid fa-question-circle"></i>';
+    if (resultIcon) resultIcon.innerHTML = '<i class="fa-solid fa-question-circle"></i>';
   }
 
   if (sentimentLabel) sentimentLabel.textContent = label;
@@ -94,28 +122,53 @@ function updateResultUI(bucket, label, score) {
   if (resultSubtext) resultSubtext.textContent = "Analysis complete.";
 }
 
-// ---------- LOGGING ----------
+// ---------------- LOGGING (NO ${}, NO template strings) ----------------
+// Uses GET via Image beacon to avoid CORS. Keep payload small to avoid URL limits.
 function sendLogToGoogleSheets(payload) {
   try {
-    // режем, чтобы URL не был огромным
+    if (!GOOGLE_WEBAPP_URL) return;
+
+    // Keep payload small (URL length limits)
     payload.review_preview = String(payload.review_preview || "").slice(0, 200);
     payload.meta = String(payload.meta || "").slice(0, 300);
+    payload.message = String(payload.message || "").slice(0, 160);
 
-    var img = new Image();
     var encoded = encodeURIComponent(JSON.stringify(payload));
+    var img = new Image();
     img.src = GOOGLE_WEBAPP_URL + "?data=" + encoded + "&_=" + Date.now();
   } catch (err) {
     console.warn("Log failed:", err);
   }
 }
 
+function logAction(eventName, message, extra) {
+  var payload = {
+    ts: new Date().toISOString(),
+    event: eventName,
+    message: message,
+    sentiment: "",
+    confidence: "",
+    url: location.href,
+    userAgent: navigator.userAgent,
+    review_preview: "",
+    meta: ""
+  };
 
-// ---------- TSV ----------
+  if (extra && typeof extra === "object") {
+    if (extra.sentiment != null) payload.sentiment = String(extra.sentiment);
+    if (extra.confidence != null) payload.confidence = String(extra.confidence);
+    if (extra.review_preview != null) payload.review_preview = String(extra.review_preview);
+    if (extra.meta != null) payload.meta = String(extra.meta);
+  }
+
+  sendLogToGoogleSheets(payload);
+}
+
+// ---------------- TSV (from GitHub RAW) ----------------
 async function loadReviewsTSV() {
-  setStatus("Loading reviews_test.tsv...", false, false);
-  logAction("tsv_start", "Loading TSV");
+  logAction("tsv_start", "Loading TSV from GitHub RAW", { meta: TSV_URL });
 
-  var res = await fetch("reviews_test.tsv", { cache: "no-store" });
+  var res = await fetch(TSV_URL, { cache: "no-store" });
   if (!res.ok) {
     throw new Error("Cannot fetch reviews_test.tsv (HTTP " + res.status + ")");
   }
@@ -138,32 +191,28 @@ async function loadReviewsTSV() {
     .map(function(v) { return v.trim(); });
 
   if (reviews.length === 0) {
-    throw new Error('No valid rows found in TSV column "text"');
+    throw new Error('No valid rows found in TSV column "text".');
   }
 
   tsvReady = true;
-  setStatus("TSV ready: " + reviews.length + " reviews loaded", false, false);
-  logAction("tsv_success", "TSV loaded", { count: reviews.length });
-  updateButtonState();
+  logAction("tsv_success", "TSV loaded", { meta: "count=" + reviews.length });
 }
 
-// ---------- MODEL ----------
+// ---------------- MODEL ----------------
 async function initModel() {
-  setStatus("Loading sentiment model... (first run may take a while)", false, false);
-  logAction("model_start", "Loading model");
+  logAction("model_start", "Loading sentiment model");
 
   sentimentPipeline = await pipeline(
     "text-classification",
-    "Xenova/distilbert-base-uncased-finetuned-sst-2-english"
+    "Xenova/distilbert-base-uncased-finetuned-sst-2-english",
+    { dtype: "q8" }
   );
 
   modelReady = true;
-  setStatus("Model ready", true, false);
   logAction("model_success", "Model loaded");
-  updateButtonState();
 }
 
-// ---------- INFERENCE ----------
+// ---------------- INFERENCE ----------------
 function bucketize(label, score) {
   if (label === "POSITIVE" && score > 0.5) return "positive";
   if (label === "NEGATIVE" && score > 0.5) return "negative";
@@ -174,11 +223,13 @@ async function analyzeRandomReview() {
   clearError();
 
   if (!tsvReady || reviews.length === 0) {
-    showError("No reviews loaded. Check that reviews_test.tsv exists and has a 'text' column.");
+    showError("TSV not ready. Cannot analyze.");
+    logAction("analyze_blocked", "TSV not ready");
     return;
   }
   if (!modelReady || !sentimentPipeline) {
-    showError("Model not ready yet. Wait for it to finish loading.");
+    showError("Model not ready. Please wait.");
+    logAction("analyze_blocked", "Model not ready");
     return;
   }
   if (isAnalyzing) return;
@@ -190,7 +241,10 @@ async function analyzeRandomReview() {
   if (resultSubtext) resultSubtext.textContent = "Running inference...";
 
   try {
-    logAction("inference_start", "Inference started", { review_preview: review.slice(0, 200) });
+    logAction("inference_start", "Inference started", {
+      review_preview: review.slice(0, 200),
+      meta: "len=" + review.length
+    });
 
     var output = await sentimentPipeline(review);
     if (!output || !output[0]) throw new Error("Unexpected model output");
@@ -201,41 +255,65 @@ async function analyzeRandomReview() {
     var bucket = bucketize(label, score);
     updateResultUI(bucket, label, score);
 
-    logAction("inference_success", "Inference complete", { sentiment: label, confidence: score });
+    logAction("inference_success", "Inference complete", {
+      sentiment: label,
+      confidence: score,
+      review_preview: review.slice(0, 200),
+      meta: "bucket=" + bucket
+    });
   } catch (err) {
-    showError("Inference failed: " + (err && err.message ? err.message : String(err)));
-    logAction("inference_fail", "Inference failed", { error: String(err) });
+    var msg = (err && err.message) ? err.message : String(err);
+    showError("Inference failed: " + msg);
+    logAction("inference_fail", "Inference failed", { meta: msg });
   } finally {
     setAnalyzeButtonLoading(false);
     updateButtonState();
   }
 }
 
-// ---------- STARTUP ----------
+// ---------------- STARTUP ----------------
 window.addEventListener("DOMContentLoaded", function() {
-  setStatus("Initializing...", false, false);
-  logAction("app_start", "App initialized");
-
-  if (analyzeBtn) analyzeBtn.addEventListener("click", analyzeRandomReview);
-
-  // Important: this must NOT be opened via file://
-  // Use GitHub Pages / Hugging Face Spaces / local server.
-  loadReviewsTSV().catch(function(err) {
-    tsvReady = false;
-    reviews = [];
-    showError("TSV error: " + (err && err.message ? err.message : String(err)) +
-      ". IMPORTANT: do not open via file://. Use http/https.");
-    setStatus("TSV failed to load", false, true);
-    updateButtonState();
-  });
-
-  initModel().catch(function(err) {
-    modelReady = false;
-    sentimentPipeline = null;
-    showError("Model error: " + (err && err.message ? err.message : String(err)));
-    setStatus("Model failed to load", false, true);
-    updateButtonState();
-  });
-
+  setStatus("Initializing…", false, false);
+  updateOverallStatus();
   updateButtonState();
+
+  logAction("page_open", "Page opened");
+
+  if (analyzeBtn) {
+    analyzeBtn.addEventListener("click", analyzeRandomReview);
+  }
+
+  loadReviewsTSV()
+    .then(function() {
+      setStatus("TSV ready: " + reviews.length + " reviews loaded", false, false);
+      updateOverallStatus();
+      updateButtonState();
+    })
+    .catch(function(err) {
+      tsvReady = false;
+      reviews = [];
+      var msg = (err && err.message) ? err.message : String(err);
+      showError("TSV error: " + msg);
+      setStatus("TSV failed to load", false, true);
+      logAction("tsv_fail", "TSV failed", { meta: msg });
+      updateOverallStatus();
+      updateButtonState();
+    });
+
+  initModel()
+    .then(function() {
+      setStatus("Model ready", true, false);
+      updateOverallStatus();
+      updateButtonState();
+    })
+    .catch(function(err) {
+      modelReady = false;
+      sentimentPipeline = null;
+      var msg = (err && err.message) ? err.message : String(err);
+      showError("Model error: " + msg);
+      setStatus("Model failed to load", false, true);
+      logAction("model_fail", "Model failed", { meta: msg });
+      updateOverallStatus();
+      updateButtonState();
+    });
 });
