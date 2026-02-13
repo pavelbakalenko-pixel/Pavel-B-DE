@@ -15,22 +15,40 @@ const GOOGLE_SHEET_URL = "";
 
 /**
  * ====================
- * DOM References
+ * DOM Helpers
  * ====================
  */
-const els = {
-  analyzeBtn: document.getElementById("analyzeBtn"),
-  status: document.getElementById("status"),
-  statusText: document.getElementById("statusText"),
-  errorBox: document.getElementById("errorBox"),
-  reviewDisplay: document.getElementById("reviewDisplay"),
-  resultArea: document.getElementById("resultArea"),
-  resultIcon: document.getElementById("resultIcon"),
-  sentimentLabel: document.getElementById("sentimentLabel"),
-  confidenceText: document.getElementById("confidenceText"),
-  resultSubtext: document.getElementById("resultSubtext"),
-  sheetLink: document.getElementById("sheetLink"),
-};
+function getEl(id) {
+  const el = document.getElementById(id);
+  if (!el) {
+    console.warn(`[dom] Missing element #${id}. Check index.html ids.`);
+  }
+  return el;
+}
+
+function requireEls() {
+  const map = {
+    analyzeBtn: "analyzeBtn",
+    status: "status",
+    statusText: "statusText",
+    errorBox: "errorBox",
+    reviewDisplay: "reviewDisplay",
+    resultArea: "resultArea",
+    resultIcon: "resultIcon",
+    sentimentLabel: "sentimentLabel",
+    confidenceText: "confidenceText",
+    resultSubtext: "resultSubtext",
+    sheetLink: "sheetLink",
+  };
+
+  const els = {};
+  for (const [key, id] of Object.entries(map)) {
+    els[key] = getEl(id);
+  }
+  return els;
+}
+
+let els = null;
 
 /**
  * ====================
@@ -49,6 +67,7 @@ let isAnalyzing = false;
  * ====================
  */
 function setStatus(message, { ready = false, error = false } = {}) {
+  if (!els?.statusText || !els?.status) return;
   els.statusText.textContent = message;
   els.status.classList.toggle("ready", ready);
   els.status.classList.toggle("error", error);
@@ -56,17 +75,21 @@ function setStatus(message, { ready = false, error = false } = {}) {
 
 function showError(message) {
   console.error("[UI error]", message);
+  if (!els?.errorBox) return;
   els.errorBox.textContent = message;
   els.errorBox.classList.add("show");
 }
 
 function clearError() {
+  if (!els?.errorBox) return;
   els.errorBox.textContent = "";
   els.errorBox.classList.remove("show");
 }
 
 function setAnalyzeButtonLoading(loading) {
+  if (!els?.analyzeBtn) return;
   isAnalyzing = loading;
+
   if (loading) {
     els.analyzeBtn.disabled = true;
     els.analyzeBtn.innerHTML = `<span class="spinner" aria-hidden="true"></span> Analyzing…`;
@@ -77,8 +100,9 @@ function setAnalyzeButtonLoading(loading) {
 }
 
 function updateResultUI(bucket, label, score) {
-  els.resultArea.classList.remove("positive", "negative", "neutral");
+  if (!els?.resultArea || !els?.resultIcon || !els?.sentimentLabel || !els?.confidenceText || !els?.resultSubtext) return;
 
+  els.resultArea.classList.remove("positive", "negative", "neutral");
   const percent = Number.isFinite(score) ? (score * 100).toFixed(1) : "—";
 
   if (bucket === "positive") {
@@ -235,20 +259,14 @@ function normalizePipelineOutput(output) {
   if (!Array.isArray(output) || output.length === 0) {
     throw new Error("Unexpected inference output format.");
   }
-
   const top = output[0];
   if (!top || typeof top.label !== "string" || typeof top.score !== "number") {
     throw new Error("Inference output missing label/score.");
   }
-
   return { label: top.label.toUpperCase(), score: top.score };
 }
 
 function bucketizeSentiment(label, score) {
-  // Requirements:
-  // Positive if label is "POSITIVE" and score > 0.5
-  // Negative if label is "NEGATIVE" and score > 0.5
-  // Neutral in all other cases
   if (label === "POSITIVE" && score > 0.5) return "positive";
   if (label === "NEGATIVE" && score > 0.5) return "negative";
   return "neutral";
@@ -283,10 +301,10 @@ async function analyzeRandomReview() {
   if (isAnalyzing) return;
 
   const review = pickRandomReview();
-  els.reviewDisplay.textContent = review;
+  if (els?.reviewDisplay) els.reviewDisplay.textContent = review;
 
   setAnalyzeButtonLoading(true);
-  els.resultSubtext.textContent = "Running inference…";
+  if (els?.resultSubtext) els.resultSubtext.textContent = "Running inference…";
 
   try {
     logAction("inference_start", "Running sentiment inference", { review });
@@ -306,7 +324,7 @@ async function analyzeRandomReview() {
   } catch (err) {
     console.error("[Inference] Failed:", err);
     showError(`Analysis failed. Please try again. Details: ${err.message || String(err)}`);
-    els.resultSubtext.textContent = "Analysis failed.";
+    if (els?.resultSubtext) els.resultSubtext.textContent = "Analysis failed.";
     updateResultUI("neutral", "NEUTRAL", NaN);
 
     logAction("inference_fail", "Inference failed", {
@@ -324,10 +342,11 @@ async function analyzeRandomReview() {
  * ====================
  */
 function updateSheetLink() {
+  if (!els?.sheetLink) return;
+
   if (GOOGLE_SHEET_URL) {
     els.sheetLink.href = GOOGLE_SHEET_URL;
   } else {
-    // If not configured, keep link non-clickable
     els.sheetLink.href = "#";
     els.sheetLink.textContent = "Logs spreadsheet link not set";
     els.sheetLink.style.pointerEvents = "none";
@@ -335,13 +354,33 @@ function updateSheetLink() {
   }
 }
 
+function verifyRequiredDom() {
+  // If these are missing, the app can't function; show a clear console hint.
+  const required = ["analyzeBtn", "status", "statusText", "errorBox", "reviewDisplay", "resultArea", "resultIcon", "sentimentLabel", "confidenceText", "resultSubtext"];
+  const missing = required.filter((k) => !els?.[k]);
+  if (missing.length) {
+    console.error("[dom] Missing required elements:", missing);
+    return false;
+  }
+  return true;
+}
+
 window.addEventListener("DOMContentLoaded", async () => {
+  els = requireEls();
   updateSheetLink();
+
+  if (!verifyRequiredDom()) {
+    // Don't proceed to avoid null dereferences; user must fix index.html ids.
+    showError(
+      "Some required UI elements are missing in index.html (IDs do not match). Check console for missing IDs."
+    );
+    return;
+  }
+
   setAnalyzeButtonLoading(false);
   setStatus("Initializing…");
   logAction("app_start", "App initialized");
 
-  // Load TSV + model in parallel
   await Promise.allSettled([loadReviewsTSV(), initModel()]);
 
   // Enable button only if both are ready
