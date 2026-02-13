@@ -20,7 +20,7 @@ let modelReady = false;
 let tsvLoaded = false;
 
 // ==================== константы ====================
-const GOOGLE_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwfwzNpa-S1DAEd4IdEJIk3Ai8kQ42uJWnwx8cMfEFpabBfB_NswOtPkx29zcy1MB5y/exec';
+const GOOGLE_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwFZGgrbxkPDGHrRUGeO67nm1XK5T9_3kAKcl9V-fseSAstTCYmKm5iKq5zPG0SQ0pL/exec';
 
 // ==================== функция отправки лога в Google Sheets ====================
 async function logToGoogleSheet(reviewText, sentimentResult, confidenceScore) {
