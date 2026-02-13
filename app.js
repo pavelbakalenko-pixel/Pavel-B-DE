@@ -2,7 +2,7 @@ import { pipeline } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers
 
 /* Google Apps Script Web App (/exec) */
 const GOOGLE_WEBAPP_URL =
-  "https://script.google.com/macros/s/AKfycbzZxVdzT1eVgImApRYXxQi6Xqa50uDxw--1FS1Zn7RCkfbDVJQLv9uipVxc5gth_9KK/exec";
+  "https://script.google.com/macros/s/AKfycbxGhZWMvVtDSX9DBxyDFw8tYIF8YtqBRWTKtWSY04er6PbjBJlLvmEERj0_BloQbaqH/exec";
 
 /* TSV from GitHub RAW (change main -> master if needed) */
 const TSV_URL =
