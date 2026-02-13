@@ -1,111 +1,164 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sentiment Analyzer</title>
-    <!-- Простые стили -->
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            max-width: 800px;
-            margin: 0 auto;
-            padding: 20px;
-            background: #f0f2f5;
-        }
-        .container {
-            background: white;
-            padding: 30px;
-            border-radius: 10px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-        }
-        h1 {
-            color: #1a73e8;
-            margin-top: 0;
-        }
-        .review-box {
-            background: #f8f9fa;
-            border: 1px solid #ddd;
-            border-radius: 5px;
-            padding: 20px;
-            min-height: 100px;
-            margin: 20px 0;
-        }
-        button {
-            background: #1a73e8;
-            color: white;
-            border: none;
-            padding: 12px 24px;
-            border-radius: 5px;
-            font-size: 16px;
-            cursor: pointer;
-            width: 100%;
-        }
-        button:disabled {
-            background: #ccc;
-            cursor: not-allowed;
-        }
-        .result {
-            margin-top: 20px;
-            padding: 20px;
-            border-radius: 5px;
-            display: none;
-        }
-        .positive { background: #e6f4ea; color: #137333; }
-        .negative { background: #fce8e6; color: #c5221f; }
-        .neutral { background: #f1f3f4; color: #5f6368; }
-        .status {
-            margin-top: 20px;
-            padding: 10px;
-            background: #e8f0fe;
-            border-radius: 5px;
-        }
-        .error {
-            margin-top: 20px;
-            padding: 10px;
-            background: #fce8e6;
-            color: #c5221f;
-            border-radius: 5px;
-            display: none;
-        }
-        .footer {
-            margin-top: 20px;
-            font-size: 12px;
-            color: #666;
-            text-align: center;
-        }
-    </style>
-    <!-- Библиотеки -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+  <title>Client-side Sentiment Decision Maker</title>
+
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+
+  <style>
+    :root{
+      --bg:#0b1220; --card:#121b2e; --text:#e6edf3; --muted:#a9b4c0; --border:#22314e;
+      --pos:#16a34a; --neg:#dc2626; --neu:#6b7280; --warn:#f59e0b; --err:#ef4444;
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0; padding:24px;
+      font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+      background:linear-gradient(180deg,#070b14,var(--bg));
+      color:var(--text);
+    }
+    .container{max-width:980px;margin:0 auto}
+    header{display:flex;flex-direction:column;gap:8px;margin-bottom:16px}
+    h1{font-size:22px;margin:0;letter-spacing:.2px}
+    .sub{color:var(--muted);margin:0;line-height:1.4;font-size:14px}
+    .card{
+      background:rgba(18,27,46,.92);
+      border:1px solid var(--border);
+      border-radius:14px;
+      padding:16px;
+      box-shadow:0 12px 30px rgba(0,0,0,.25);
+    }
+    .controls{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px}
+    button{
+      appearance:none;border:1px solid var(--border);background:#0f1a33;color:var(--text);
+      padding:10px 14px;border-radius:10px;cursor:pointer;font-weight:600;
+      display:inline-flex;align-items:center;gap:10px;transition:transform .05s ease,background .2s ease;
+      user-select:none;
+    }
+    button:hover{background:#122045}
+    button:active{transform:translateY(1px)}
+    button:disabled{cursor:not-allowed;opacity:.6}
+
+    .spinner{
+      width:14px;height:14px;border:2px solid rgba(255,255,255,.25);
+      border-top-color:rgba(255,255,255,.9);border-radius:50%;
+      animation:spin .8s linear infinite;
+    }
+    @keyframes spin{to{transform:rotate(360deg)}}
+
+    .status{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:14px;min-height:22px}
+    .status .dot{width:10px;height:10px;border-radius:999px;background:var(--warn);box-shadow:0 0 0 4px rgba(245,158,11,.15);flex:0 0 auto}
+    .status.ready .dot{background:var(--pos);box-shadow:0 0 0 4px rgba(22,163,74,.15)}
+    .status.error .dot{background:var(--err);box-shadow:0 0 0 4px rgba(239,68,68,.15)}
+
+    .row{display:grid;grid-template-columns:1fr;gap:16px;margin-top:16px}
+    @media (min-width:920px){ .row{grid-template-columns:1.35fr .65fr} }
+
+    .hint{margin:0 0 10px 0;color:var(--muted);font-size:13px}
+    .reviewBox{
+      min-height:140px;padding:14px;border-radius:12px;border:1px dashed rgba(255,255,255,.16);
+      background:rgba(0,0,0,.18);color:var(--text);line-height:1.5;white-space:pre-wrap
+    }
+
+    .result{
+      display:flex;align-items:center;gap:14px;border:1px solid var(--border);border-radius:12px;
+      padding:14px;background:rgba(0,0,0,.12)
+    }
+    .resultIcon{font-size:24px;width:34px;text-align:center;flex:0 0 auto}
+    .labelLine{font-weight:800;letter-spacing:.3px;display:flex;align-items:baseline;gap:8px}
+    .confidence{font-weight:600;color:var(--muted);font-size:13px}
+    .result.positive{border-color:rgba(22,163,74,.55)}
+    .result.negative{border-color:rgba(220,38,38,.55)}
+    .result.neutral{border-color:rgba(107,114,128,.55)}
+
+    .action{
+      margin-top:12px;
+      padding:12px;
+      border-radius:12px;
+      border:1px solid var(--border);
+      background:rgba(0,0,0,.12);
+      line-height:1.4;
+      font-weight:600;
+    }
+    .action.positive{border-color:rgba(22,163,74,.55)}
+    .action.negative{border-color:rgba(220,38,38,.55)}
+    .action.neutral{border-color:rgba(107,114,128,.55)}
+
+    .error{
+      display:none;margin-top:12px;padding:12px 14px;border-radius:12px;
+      border:1px solid rgba(239,68,68,.5);background:rgba(239,68,68,.08);
+      color:#fecaca;line-height:1.4;font-size:14px;
+    }
+    .error.show{display:block}
+
+    .links{display:flex;gap:12px;flex-wrap:wrap;font-size:13px;margin-top:6px}
+    .links a{color:#93c5fd;text-decoration:none;border-bottom:1px dotted rgba(147,197,253,.45)}
+    .links a:hover{border-bottom-style:solid}
+  </style>
 </head>
+
 <body>
-    <div class="container">
-        <h1>🎯 Анализатор отзывов</h1>
-        
-        <!-- Отзыв -->
-        <div class="review-box" id="reviewBox">
-            Нажмите кнопку для анализа
+  <div class="container">
+    <header>
+      <h1>Client-side Sentiment Decision Maker</h1>
+      <p class="sub">
+        Loads a TSV of product reviews, runs sentiment analysis fully in your browser, maps the sentiment to a business action, and logs to Google Sheets.
+      </p>
+      <div class="links">
+        <a id="sheetLink" href="https://docs.google.com/spreadsheets/d/11LlhODqK3C_ZWNpQKpEbxfDzMjCDbXEpL-PS4_nBi0c/edit" target="_blank" rel="noreferrer">
+          Open logs spreadsheet
+        </a>
+      </div>
+    </header>
+
+    <div class="card">
+      <div class="controls">
+        <button id="analyzeBtn" disabled>
+          <i class="fa-solid fa-shuffle"></i>
+          Analyze random review
+        </button>
+
+        <div id="status" class="status" aria-live="polite">
+          <span class="dot" aria-hidden="true"></span>
+          <span id="statusText">Initializing…</span>
         </div>
-        
-        <!-- Кнопка -->
-        <button id="analyzeBtn">Анализировать случайный отзыв</button>
-        
-        <!-- Результат -->
-        <div class="result" id="result"></div>
-        
-        <!-- Статус -->
-        <div class="status" id="status">Загрузка приложения...</div>
-        
-        <!-- Ошибки -->
-        <div class="error" id="error"></div>
-        
-        <!-- Футер -->
-        <div class="footer" id="footer">
-            Загрузка...
-        </div>
+      </div>
+
+      <div id="errorBox" class="error" role="alert"></div>
     </div>
-    
-    <script type="module" src="app.js"></script>
+
+    <div class="row">
+      <div class="card">
+        <p class="hint">Selected review</p>
+        <div id="reviewDisplay" class="reviewBox">
+          Click “Analyze random review” once the model and TSV are ready.
+        </div>
+      </div>
+
+      <div class="card">
+        <p class="hint">Result</p>
+
+        <div id="resultArea" class="result neutral">
+          <div id="resultIcon" class="resultIcon" aria-hidden="true">
+            <i class="fa-solid fa-question-circle"></i>
+          </div>
+          <div>
+            <div class="labelLine">
+              <span id="sentimentLabel">NEUTRAL</span>
+              <span id="confidenceText" class="confidence">(—)</span>
+            </div>
+            <div class="confidence" id="resultSubtext">Waiting for analysis…</div>
+          </div>
+        </div>
+
+        <div id="actionMessage" class="action neutral">—</div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="app.js"></script>
 </body>
 </html>
