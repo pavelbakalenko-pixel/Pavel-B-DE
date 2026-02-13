@@ -1,318 +1,361 @@
-// app.js — complete browser‑side sentiment analysis + JSONP logging (CORS-free)
+// app.js — Fully client-side TSV loading + Transformers.js inference + Google Sheets logging (CORS-free)
 import { pipeline } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.6/dist/transformers.min.js";
 
-// ==================== DOM элементы ====================
-const statusIcon = document.getElementById('statusIcon');
-const statusMsg = document.getElementById('statusMessage');
-const reviewDisplay = document.getElementById('reviewDisplay');
-const resultArea = document.getElementById('resultArea');
-const resultIcon = document.getElementById('resultIcon');
-const sentimentLabel = document.getElementById('sentimentLabel');
-const confidenceText = document.getElementById('confidenceText');
-const analyzeBtn = document.getElementById('analyzeBtn');
-const errorBox = document.getElementById('errorBox');
-const errorText = document.getElementById('errorText');
+/**
+ * Google Apps Script Web App (/exec) — logs endpoint (CORS-free via GET Image beacon)
+ */
+const GOOGLE_WEBAPP_URL =
+  "https://script.google.com/macros/s/AKfycbzdE1BRZOatG0tfEqe66aTMOhd0Qsjk5AZV7IQLy7tpapMJICoT3BeMKI5XnFPsSpVf/exec";
 
-// ==================== состояние приложения ====================
-let reviews = [];               // массив отзывов
-let sentimentPipeline = null;    // модель
+/**
+ * Optional: put your Google Sheet URL here to show a clickable link in the UI.
+ * If you don't know it, leave it empty.
+ */
+const GOOGLE_SHEET_URL = "";
+
+/**
+ * ====================
+ * DOM References
+ * ====================
+ */
+const els = {
+  analyzeBtn: document.getElementById("analyzeBtn"),
+  status: document.getElementById("status"),
+  statusText: document.getElementById("statusText"),
+  errorBox: document.getElementById("errorBox"),
+  reviewDisplay: document.getElementById("reviewDisplay"),
+  resultArea: document.getElementById("resultArea"),
+  resultIcon: document.getElementById("resultIcon"),
+  sentimentLabel: document.getElementById("sentimentLabel"),
+  confidenceText: document.getElementById("confidenceText"),
+  resultSubtext: document.getElementById("resultSubtext"),
+  sheetLink: document.getElementById("sheetLink"),
+};
+
+/**
+ * ====================
+ * App State
+ * ====================
+ */
+let reviews = [];
+let sentimentPipeline = null;
 let modelReady = false;
-let tsvLoaded = false;
+let tsvReady = false;
+let isAnalyzing = false;
 
-// ==================== URL твоего Google Apps Script (ВСТАВЬ СВОЙ!) ====================
-const GAS_URL = 'https://script.google.com/macros/s/AKfycbw_uzWIONJoCDlK5kEDVqk2KnCPrgzJiguxLs5UiVrzKapi-UtIaKC6PMRbthJNPrfd/exec';
-
-// ==================== JSONP функция (обходит CORS) ====================
-function jsonpRequest(data) {
-  return new Promise((resolve, reject) => {
-    // Создаем уникальное имя callback-функции
-    const callbackName = 'jsonp_cb_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
-    
-    // Таймаут на случай ошибки
-    const timeout = setTimeout(() => {
-      cleanup();
-      reject(new Error('JSONP timeout'));
-    }, 10000);
-
-    // Функция очистки
-    function cleanup() {
-      if (window[callbackName]) {
-        delete window[callbackName];
-      }
-      const script = document.getElementById(callbackName);
-      if (script) {
-        document.body.removeChild(script);
-      }
-      clearTimeout(timeout);
-    }
-
-    // Создаем глобальную функцию обратного вызова
-    window[callbackName] = function(response) {
-      cleanup();
-      console.log('✅ JSONP ответ:', response);
-      resolve(response);
-    };
-
-    // Создаем script-тег (это и есть JSONP)
-    const script = document.createElement('script');
-    script.id = callbackName;
-    
-    // Кодируем данные и добавляем callback в URL
-    const encodedData = encodeURIComponent(JSON.stringify(data));
-    script.src = `${GAS_URL}?callback=${callbackName}&data=${encodedData}`;
-    
-    script.onerror = function(error) {
-      cleanup();
-      reject(new Error('JSONP error: ' + error));
-    };
-
-    // Добавляем скрипт на страницу - запрос уходит автоматически
-    document.body.appendChild(script);
-  });
+/**
+ * ====================
+ * UI Helpers
+ * ====================
+ */
+function setStatus(message, { ready = false, error = false } = {}) {
+  els.statusText.textContent = message;
+  els.status.classList.toggle("ready", ready);
+  els.status.classList.toggle("error", error);
 }
 
-// ==================== функция отправки лога в Google Sheets ====================
-async function logToGoogleSheet(reviewText, sentimentResult, confidenceScore) {
-  // Формируем данные для отправки
-  const payload = {
-    ts_iso: new Date().toISOString(),                    // колонка 1: временная метка
-    review: reviewText,                                    // колонка 2: текст отзыва
-    sentiment: `${sentimentResult} (${(confidenceScore * 100).toFixed(1)}%)`, // колонка 3: тональность
-    meta: JSON.stringify({                                 // колонка 4: мета-информация
-      userAgent: navigator.userAgent,
-      url: window.location.href,
-      timestamp: Date.now(),
-      screen: `${window.innerWidth}x${window.innerHeight}`
-    })
-  };
-
-  console.log('📤 Отправка в Google Sheets:', payload);
-
-  try {
-    // Отправляем через JSONP (обходит CORS)
-    await jsonpRequest(payload);
-    console.log('✅ Данные успешно отправлены через JSONP');
-    
-    // Запасной вариант через изображение (на всякий случай)
-    const img = new Image();
-    img.src = `${GAS_URL}?data=${encodeURIComponent(JSON.stringify(payload))}`;
-    img.style.display = 'none';
-    document.body.appendChild(img);
-    setTimeout(() => {
-      if (img.parentNode) document.body.removeChild(img);
-    }, 1000);
-    
-  } catch (error) {
-    console.error('❌ Ошибка отправки:', error);
-    
-    // Последний шанс - sendBeacon
-    const blob = new Blob([JSON.stringify(payload)], { type: 'text/plain' });
-    navigator.sendBeacon(GAS_URL, blob);
-    console.log('📡 Отправлено через sendBeacon как fallback');
-  }
-}
-
-// ==================== helpers UI ====================
-function showError(msg, hideAfter = 8000) {
-  console.error('[error]', msg);
-  errorText.textContent = msg;
-  errorBox.classList.remove('hidden');
-  if (hideAfter) {
-    setTimeout(() => {
-      errorBox.classList.add('hidden');
-    }, hideAfter);
-  }
+function showError(message) {
+  console.error("[UI error]", message);
+  els.errorBox.textContent = message;
+  els.errorBox.classList.add("show");
 }
 
 function clearError() {
-  errorBox.classList.add('hidden');
-  errorText.textContent = '';
+  els.errorBox.textContent = "";
+  els.errorBox.classList.remove("show");
 }
 
-function setStatus(icon, message, isReady = false, isLoading = false, isError = false) {
-  statusMsg.textContent = message;
-  statusIcon.innerHTML = icon;
-  statusIcon.className = 'status-icon';
-  if (isReady) statusIcon.classList.add('ready');
-  else if (isError) statusIcon.classList.add('error');
-  else if (isLoading) statusIcon.classList.add('loading');
-}
-
-function updateResultUI(sentiment, confidence) {
-  resultArea.classList.remove('positive', 'negative', 'neutral');
-
-  let iconHtml = '';
-  let label = '';
-  let confPercent = (confidence * 100).toFixed(1);
-
-  if (sentiment === 'positive') {
-    resultArea.classList.add('positive');
-    iconHtml = '<i class="fa-solid fa-thumbs-up" style="color: #16a34a;"></i>';
-    label = `POSITIVE (${confPercent}% confidence)`;
-  } else if (sentiment === 'negative') {
-    resultArea.classList.add('negative');
-    iconHtml = '<i class="fa-solid fa-thumbs-down" style="color: #dc2626;"></i>';
-    label = `NEGATIVE (${confPercent}% confidence)`;
+function setAnalyzeButtonLoading(loading) {
+  isAnalyzing = loading;
+  if (loading) {
+    els.analyzeBtn.disabled = true;
+    els.analyzeBtn.innerHTML = `<span class="spinner" aria-hidden="true"></span> Analyzing…`;
   } else {
-    resultArea.classList.add('neutral');
-    iconHtml = '<i class="fa-solid fa-question-circle" style="color: #6b7280;"></i>';
-    label = `NEUTRAL (${confPercent}% confidence)`;
-  }
-
-  resultIcon.innerHTML = iconHtml;
-  sentimentLabel.textContent = label.split('(')[0].trim();
-  confidenceText.textContent = `(${confPercent}% confidence)`;
-}
-
-function setLoadingAnalysis(isLoading) {
-  if (isLoading) {
-    analyzeBtn.disabled = true;
-    analyzeBtn.innerHTML = '<span class="loading-spinner"></span> analyzing…';
-  } else {
-    analyzeBtn.disabled = (!modelReady || !tsvLoaded || reviews.length === 0);
-    analyzeBtn.innerHTML = '<i class="fa-solid fa-shuffle"></i> analyze random review';
+    els.analyzeBtn.innerHTML = `<i class="fa-solid fa-shuffle"></i> Analyze random review`;
+    els.analyzeBtn.disabled = !(modelReady && tsvReady && reviews.length > 0);
   }
 }
 
-// ==================== загрузка TSV ====================
+function updateResultUI(bucket, label, score) {
+  els.resultArea.classList.remove("positive", "negative", "neutral");
+
+  const percent = Number.isFinite(score) ? (score * 100).toFixed(1) : "—";
+
+  if (bucket === "positive") {
+    els.resultArea.classList.add("positive");
+    els.resultIcon.innerHTML = `<i class="fa-solid fa-thumbs-up" aria-hidden="true"></i>`;
+  } else if (bucket === "negative") {
+    els.resultArea.classList.add("negative");
+    els.resultIcon.innerHTML = `<i class="fa-solid fa-thumbs-down" aria-hidden="true"></i>`;
+  } else {
+    els.resultArea.classList.add("neutral");
+    els.resultIcon.innerHTML = `<i class="fa-solid fa-question-circle" aria-hidden="true"></i>`;
+  }
+
+  els.sentimentLabel.textContent = label || "NEUTRAL";
+  els.confidenceText.textContent = `(${percent}% confidence)`;
+  els.resultSubtext.textContent = "Analysis complete.";
+}
+
+/**
+ * ====================
+ * Logging (CORS-free)
+ * ====================
+ * We send logs as a GET request via an <img> beacon to avoid CORS preflight.
+ */
+function sendLogToGoogleSheets(payload) {
+  if (!GOOGLE_WEBAPP_URL) return;
+  try {
+    const img = new Image();
+    const data = encodeURIComponent(JSON.stringify(payload));
+    img.src = `${GOOGLE_WEBAPP_URL}?data=${data}&_=${Date.now()}`;
+  } catch (err) {
+    console.warn("[log] Failed to send log", err);
+  }
+}
+
+function logAction(event, message, extra = {}) {
+  const reviewPreview =
+    typeof extra.review === "string"
+      ? extra.review.slice(0, 240)
+      : (typeof extra.review_preview === "string" ? extra.review_preview.slice(0, 240) : "");
+
+  const payload = {
+    ts_iso: new Date().toISOString(),
+    event,
+    message,
+    sentiment: extra.sentiment || "",
+    confidence: typeof extra.confidence === "number" ? extra.confidence : "",
+    review_preview: reviewPreview,
+    url: location.href,
+    userAgent: navigator.userAgent,
+    meta: JSON.stringify({
+      ...extra,
+      review: undefined, // avoid duplicating full review text in meta
+    }),
+  };
+
+  sendLogToGoogleSheets(payload);
+}
+
+/**
+ * ====================
+ * TSV Loading & Parsing
+ * ====================
+ */
 async function loadReviewsTSV() {
-  try {
-    setStatus('⏳', '📦 loading reviews_test.tsv ...', false, true);
-    const response = await fetch('reviews_test.tsv');
-    if (!response.ok) throw new Error(`HTTP ${response.status} — cannot fetch TSV`);
+  setStatus("Loading reviews_test.tsv…");
+  logAction("tsv_load_start", "Fetching reviews_test.tsv");
 
-    const tsvText = await response.text();
-    
-    Papa.parse(tsvText, {
-      header: true,
-      delimiter: '\t',
-      skipEmptyLines: true,
-      complete: (result) => {
-        try {
-          if (result.errors && result.errors.length) {
-            console.warn('PapaParse warnings:', result.errors);
-          }
-          const rawRows = result.data;
-          const extracted = rawRows
-            .map(row => row.text?.trim())
-            .filter(txt => txt && typeof txt === 'string' && txt.length > 0);
-          
-          if (extracted.length === 0) throw new Error('No valid reviews in text column');
-          
-          reviews = extracted;
-          tsvLoaded = true;
-          setStatus('✅', `✅ ${reviews.length} reviews loaded`, true);
-          enableIfReady();
-        } catch (parseErr) {
-          handleTsvError(parseErr.message);
-        }
-      },
-      error: (parseError) => {
-        handleTsvError(parseError.message);
-      }
+  try {
+    const res = await fetch("reviews_test.tsv", { cache: "no-store" });
+    if (!res.ok) throw new Error(`HTTP ${res.status} while fetching reviews_test.tsv`);
+
+    const tsvText = await res.text();
+
+    const parsed = await new Promise((resolve, reject) => {
+      Papa.parse(tsvText, {
+        header: true,
+        delimiter: "\t",
+        skipEmptyLines: true,
+        complete: (result) => resolve(result),
+        error: (err) => reject(err),
+      });
     });
-  } catch (netErr) {
-    handleTsvError(netErr.message);
+
+    if (!parsed || !Array.isArray(parsed.data)) {
+      throw new Error("Unexpected TSV parse result.");
+    }
+
+    const extracted = parsed.data
+      .map((row) => row?.text)
+      .filter((v) => typeof v === "string")
+      .map((v) => v.trim())
+      .filter((v) => v.length > 0);
+
+    if (extracted.length === 0) {
+      throw new Error('No valid review texts found in the "text" column.');
+    }
+
+    reviews = extracted;
+    tsvReady = true;
+
+    setStatus(`TSV ready: ${reviews.length} reviews loaded.`);
+    logAction("tsv_load_success", `Loaded ${reviews.length} reviews`, { count: reviews.length });
+  } catch (err) {
+    tsvReady = false;
+    reviews = [];
+
+    console.error("[TSV] Load/parse failed:", err);
+    setStatus("TSV failed to load.", { error: true });
+    showError(
+      `Could not load or parse reviews_test.tsv. Make sure the file exists next to index.html and contains a "text" column. Details: ${err.message}`
+    );
+    logAction("tsv_load_fail", "TSV load/parse failed", { error: err.message });
   }
 }
 
-function handleTsvError(msg) {
-  tsvLoaded = false;
-  reviews = [];
-  setStatus('⚠️', '❌ TSV error', false, false, true);
-  showError(`Failed to load reviews: ${msg}`, 10000);
-  enableIfReady();
-}
-
-// ==================== инициализация модели ====================
+/**
+ * ====================
+ * Model Initialization
+ * ====================
+ */
 async function initModel() {
+  setStatus("Loading sentiment model… (first run may take a while)");
+  logAction("model_load_start", "Initializing Transformers.js pipeline");
+
   try {
-    setStatus('🧠', '⏳ loading sentiment model (first time may take a moment) …', false, true);
     sentimentPipeline = await pipeline(
-      'text-classification', 
-      'Xenova/distilbert-base-uncased-finetuned-sst-2-english'
+      "text-classification",
+      "Xenova/distilbert-base-uncased-finetuned-sst-2-english"
     );
+
     modelReady = true;
-    setStatus('✅', '✅ model ready — distilbert‑sst2', true);
-    enableIfReady();
-  } catch (modelErr) {
-    console.error('Model init error:', modelErr);
+    setStatus("Sentiment model ready.", { ready: true });
+    logAction("model_load_success", "Model loaded and ready");
+  } catch (err) {
     modelReady = false;
     sentimentPipeline = null;
-    setStatus('🔥', '❌ model failed', false, false, true);
-    showError(`Model load error: ${modelErr.message || 'unknown'}. Check console.`, 0);
-    enableIfReady();
+
+    console.error("[Model] Load failed:", err);
+    setStatus("Model failed to load.", { error: true });
+    showError(
+      `Could not load the sentiment model in your browser. Check the console for details. Details: ${err.message || String(err)}`
+    );
+    logAction("model_load_fail", "Model load failed", { error: err.message || String(err) });
   }
 }
 
-function enableIfReady() {
-  const ready = modelReady && tsvLoaded && reviews.length > 0;
-  analyzeBtn.disabled = !ready;
-  if (ready) {
-    statusMsg.textContent += ' — ready to analyze';
+/**
+ * ====================
+ * Sentiment Mapping
+ * ====================
+ */
+function normalizePipelineOutput(output) {
+  if (!Array.isArray(output) || output.length === 0) {
+    throw new Error("Unexpected inference output format.");
   }
+
+  const top = output[0];
+  if (!top || typeof top.label !== "string" || typeof top.score !== "number") {
+    throw new Error("Inference output missing label/score.");
+  }
+
+  return { label: top.label.toUpperCase(), score: top.score };
 }
 
-// ==================== основной анализ ====================
+function bucketizeSentiment(label, score) {
+  // Requirements:
+  // Positive if label is "POSITIVE" and score > 0.5
+  // Negative if label is "NEGATIVE" and score > 0.5
+  // Neutral in all other cases
+  if (label === "POSITIVE" && score > 0.5) return "positive";
+  if (label === "NEGATIVE" && score > 0.5) return "negative";
+  return "neutral";
+}
+
+/**
+ * ====================
+ * Analysis Flow
+ * ====================
+ */
+function pickRandomReview() {
+  const idx = Math.floor(Math.random() * reviews.length);
+  return reviews[idx];
+}
+
 async function analyzeRandomReview() {
   clearError();
+  logAction("analyze_click", "Analyze button clicked");
+
+  if (!tsvReady || reviews.length === 0) {
+    showError("No reviews loaded yet. Please ensure reviews_test.tsv is available and try again.");
+    logAction("analyze_blocked", "No reviews loaded");
+    return;
+  }
 
   if (!modelReady || !sentimentPipeline) {
-    showError('Model not ready — please wait or reload.', 4000);
-    return;
-  }
-  if (!tsvLoaded || reviews.length === 0) {
-    showError('No reviews loaded — check TSV file.', 4000);
+    showError("Model is not ready yet. Please wait for it to finish loading, then try again.");
+    logAction("analyze_blocked", "Model not ready");
     return;
   }
 
-  const randomIndex = Math.floor(Math.random() * reviews.length);
-  const selectedReview = reviews[randomIndex];
-  reviewDisplay.textContent = selectedReview;
+  if (isAnalyzing) return;
 
-  setLoadingAnalysis(true);
+  const review = pickRandomReview();
+  els.reviewDisplay.textContent = review;
+
+  setAnalyzeButtonLoading(true);
+  els.resultSubtext.textContent = "Running inference…";
 
   try {
-    const result = await sentimentPipeline(selectedReview);
-    if (!Array.isArray(result) || result.length === 0) {
-      throw new Error('Unexpected model output format');
-    }
+    logAction("inference_start", "Running sentiment inference", { review });
 
-    const top = result[0];
-    let rawLabel = top.label.toUpperCase();
-    let rawScore = top.score;
+    const raw = await sentimentPipeline(review);
+    const { label, score } = normalizePipelineOutput(raw);
+    const bucket = bucketizeSentiment(label, score);
 
-    let finalSentiment = 'neutral';
-    if (rawLabel.includes('POSITIVE') && rawScore > 0.5) {
-      finalSentiment = 'positive';
-    } else if (rawLabel.includes('NEGATIVE') && rawScore > 0.5) {
-      finalSentiment = 'negative';
-    } else {
-      finalSentiment = 'neutral';
-    }
+    updateResultUI(bucket, label, score);
 
-    // Обновляем интерфейс
-    updateResultUI(finalSentiment, rawScore);
-    
-    // 🚀 ОТПРАВЛЯЕМ ЛОГ В GOOGLE SHEETS (JSONP метод)
-    await logToGoogleSheet(selectedReview, finalSentiment.toUpperCase(), rawScore);
+    logAction("inference_success", "Inference complete", {
+      review,
+      sentiment: label,
+      confidence: score,
+      bucket,
+    });
+  } catch (err) {
+    console.error("[Inference] Failed:", err);
+    showError(`Analysis failed. Please try again. Details: ${err.message || String(err)}`);
+    els.resultSubtext.textContent = "Analysis failed.";
+    updateResultUI("neutral", "NEUTRAL", NaN);
 
-  } catch (inferErr) {
-    console.error('inference error:', inferErr);
-    showError(`Analysis failed: ${inferErr.message}`, 6000);
-    resultIcon.innerHTML = '<i class="fa-regular fa-circle-question"></i>';
-    sentimentLabel.textContent = 'error';
-    confidenceText.textContent = '—';
-    resultArea.classList.remove('positive', 'negative', 'neutral');
+    logAction("inference_fail", "Inference failed", {
+      error: err.message || String(err),
+      review_preview: review?.slice(0, 240),
+    });
   } finally {
-    setLoadingAnalysis(false);
+    setAnalyzeButtonLoading(false);
   }
 }
 
-// ==================== запуск ====================
-window.addEventListener('DOMContentLoaded', async () => {
-  setStatus('⏳', 'initializing...', false, true);
+/**
+ * ====================
+ * Startup
+ * ====================
+ */
+function updateSheetLink() {
+  if (GOOGLE_SHEET_URL) {
+    els.sheetLink.href = GOOGLE_SHEET_URL;
+  } else {
+    // If not configured, keep link non-clickable
+    els.sheetLink.href = "#";
+    els.sheetLink.textContent = "Logs spreadsheet link not set";
+    els.sheetLink.style.pointerEvents = "none";
+    els.sheetLink.style.opacity = "0.7";
+  }
+}
+
+window.addEventListener("DOMContentLoaded", async () => {
+  updateSheetLink();
+  setAnalyzeButtonLoading(false);
+  setStatus("Initializing…");
+  logAction("app_start", "App initialized");
+
+  // Load TSV + model in parallel
   await Promise.allSettled([loadReviewsTSV(), initModel()]);
-  analyzeBtn.addEventListener('click', analyzeRandomReview);
-  enableIfReady();
+
+  // Enable button only if both are ready
+  els.analyzeBtn.disabled = !(modelReady && tsvReady && reviews.length > 0);
+
+  if (modelReady && tsvReady) {
+    setStatus("Ready. Click “Analyze random review”.", { ready: true });
+  } else if (!modelReady && !tsvReady) {
+    setStatus("Not ready: model and TSV failed to load.", { error: true });
+  } else if (!modelReady) {
+    setStatus("Not ready: model failed to load.", { error: true });
+  } else if (!tsvReady) {
+    setStatus("Not ready: TSV failed to load.", { error: true });
+  }
+
+  els.analyzeBtn.addEventListener("click", analyzeRandomReview);
 });
