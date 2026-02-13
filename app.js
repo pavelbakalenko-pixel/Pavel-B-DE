@@ -1,4 +1,4 @@
-// app.js — complete browser‑side sentiment analysis with Transformers.js + Google Sheets logging
+// app.js — complete browser‑side sentiment analysis + JSONP logging (CORS-free)
 import { pipeline } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.6/dist/transformers.min.js";
 
 // ==================== DOM элементы ====================
@@ -19,8 +19,57 @@ let sentimentPipeline = null;    // модель
 let modelReady = false;
 let tsvLoaded = false;
 
-// ==================== константа с URL твоего веб-приложения ====================
-const GOOGLE_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbz0jK9iZQbNFbtE7kI4EU1OKC7QOMCGsPmDoj902WEW1kta324tskGFCIzD7s5x70dO/exec';
+// ==================== URL твоего Google Apps Script (ВСТАВЬ СВОЙ!) ====================
+const GAS_URL = 'https://script.google.com/macros/s/AKfycbw_uzWIONJoCDlK5kEDVqk2KnCPrgzJiguxLs5UiVrzKapi-UtIaKC6PMRbthJNPrfd/exec';
+
+// ==================== JSONP функция (обходит CORS) ====================
+function jsonpRequest(data) {
+  return new Promise((resolve, reject) => {
+    // Создаем уникальное имя callback-функции
+    const callbackName = 'jsonp_cb_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+    
+    // Таймаут на случай ошибки
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error('JSONP timeout'));
+    }, 10000);
+
+    // Функция очистки
+    function cleanup() {
+      if (window[callbackName]) {
+        delete window[callbackName];
+      }
+      const script = document.getElementById(callbackName);
+      if (script) {
+        document.body.removeChild(script);
+      }
+      clearTimeout(timeout);
+    }
+
+    // Создаем глобальную функцию обратного вызова
+    window[callbackName] = function(response) {
+      cleanup();
+      console.log('✅ JSONP ответ:', response);
+      resolve(response);
+    };
+
+    // Создаем script-тег (это и есть JSONP)
+    const script = document.createElement('script');
+    script.id = callbackName;
+    
+    // Кодируем данные и добавляем callback в URL
+    const encodedData = encodeURIComponent(JSON.stringify(data));
+    script.src = `${GAS_URL}?callback=${callbackName}&data=${encodedData}`;
+    
+    script.onerror = function(error) {
+      cleanup();
+      reject(new Error('JSONP error: ' + error));
+    };
+
+    // Добавляем скрипт на страницу - запрос уходит автоматически
+    document.body.appendChild(script);
+  });
+}
 
 // ==================== функция отправки лога в Google Sheets ====================
 async function logToGoogleSheet(reviewText, sentimentResult, confidenceScore) {
@@ -32,36 +81,34 @@ async function logToGoogleSheet(reviewText, sentimentResult, confidenceScore) {
     meta: JSON.stringify({                                 // колонка 4: мета-информация
       userAgent: navigator.userAgent,
       url: window.location.href,
-      timestamp: Date.now()
+      timestamp: Date.now(),
+      screen: `${window.innerWidth}x${window.innerHeight}`
     })
   };
 
   console.log('📤 Отправка в Google Sheets:', payload);
 
   try {
-    // Пробуем отправить через fetch с Content-Type: text/plain (обходит CORS)
-    const response = await fetch(GOOGLE_SCRIPT_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'text/plain;charset=utf-8' // ВАЖНО! Не application/json
-      },
-      body: JSON.stringify(payload)
-    });
+    // Отправляем через JSONP (обходит CORS)
+    await jsonpRequest(payload);
+    console.log('✅ Данные успешно отправлены через JSONP');
     
-    console.log('✅ Данные успешно отправлены через fetch');
+    // Запасной вариант через изображение (на всякий случай)
+    const img = new Image();
+    img.src = `${GAS_URL}?data=${encodeURIComponent(JSON.stringify(payload))}`;
+    img.style.display = 'none';
+    document.body.appendChild(img);
+    setTimeout(() => {
+      if (img.parentNode) document.body.removeChild(img);
+    }, 1000);
     
-  } catch (fetchError) {
-    console.error('❌ Fetch не сработал, пробуем sendBeacon:', fetchError);
+  } catch (error) {
+    console.error('❌ Ошибка отправки:', error);
     
-    // Запасной вариант через sendBeacon (тоже работает без CORS)
+    // Последний шанс - sendBeacon
     const blob = new Blob([JSON.stringify(payload)], { type: 'text/plain' });
-    const sent = navigator.sendBeacon(GOOGLE_SCRIPT_URL, blob);
-    
-    if (sent) {
-      console.log('✅ Данные успешно отправлены через sendBeacon');
-    } else {
-      console.error('❌ sendBeacon тоже не сработал');
-    }
+    navigator.sendBeacon(GAS_URL, blob);
+    console.log('📡 Отправлено через sendBeacon как fallback');
   }
 }
 
@@ -247,7 +294,7 @@ async function analyzeRandomReview() {
     // Обновляем интерфейс
     updateResultUI(finalSentiment, rawScore);
     
-    // 🚀 ОТПРАВЛЯЕМ ЛОГ В GOOGLE SHEETS
+    // 🚀 ОТПРАВЛЯЕМ ЛОГ В GOOGLE SHEETS (JSONP метод)
     await logToGoogleSheet(selectedReview, finalSentiment.toUpperCase(), rawScore);
 
   } catch (inferErr) {
