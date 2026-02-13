@@ -1,7 +1,7 @@
 import { pipeline } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.6/dist/transformers.min.js";
 
 const GOOGLE_WEBAPP_URL =
-  "https://script.google.com/macros/s/AKfycbzdE1BRZOatG0tfEqe66aTMOhd0Qsjk5AZV7IQLy7tpapMJICoT3BeMKI5XnFPsSpVf/exec";
+  "https://script.google.com/macros/s/AKfycbz_my8gcVbtia-YRkPcdoKwEQVQNPFw_STFl2fqcK3-AEdYC2ueXWz73icvuFcFwfd8/exec";
 
 // ---------- STATE ----------
 var reviews = [];
