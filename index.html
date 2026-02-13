@@ -1,120 +1,307 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <title>Client-Side Sentiment Analyzer</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Review Sentiment Analyzer · Transformers.js</title>
+    <!-- Font Awesome for icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Papa Parse for TSV parsing -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
 
-  <!-- Font Awesome for sentiment icons -->
-  <link
-    rel="stylesheet"
-    href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"
-  />
+        body {
+            font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+            background: #f8fafc;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0;
+            padding: 1.5rem;
+        }
 
-  <style>
-    body {
-      font-family: Arial, sans-serif;
-      background: #f5f7fa;
-      margin: 0;
-      padding: 20px;
-    }
+        .card {
+            max-width: 720px;
+            width: 100%;
+            background: white;
+            border-radius: 32px;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+            padding: 2.5rem;
+            transition: all 0.2s;
+        }
 
-    h1 {
-      text-align: center;
-    }
+        h1 {
+            font-size: 2.2rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            background: linear-gradient(145deg, #0f172a, #334155);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 0.5rem;
+        }
 
-    .container {
-      max-width: 800px;
-      margin: 0 auto;
-      background: #ffffff;
-      padding: 20px;
-      border-radius: 6px;
-      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
-    }
+        .subhead {
+            color: #475569;
+            margin-bottom: 2rem;
+            border-left: 4px solid #e2e8f0;
+            padding-left: 1rem;
+            font-weight: 400;
+            font-size: 1rem;
+        }
 
-    button {
-      padding: 10px 16px;
-      font-size: 16px;
-      cursor: pointer;
-      margin-bottom: 16px;
-    }
+        .status-bar {
+            background: #f1f5f9;
+            border-radius: 60px;
+            padding: 0.75rem 1.5rem;
+            font-size: 0.95rem;
+            color: #1e293b;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            margin-bottom: 2rem;
+            border: 1px solid #e2e8f0;
+            backdrop-filter: blur(4px);
+        }
 
-    button:disabled {
-      opacity: 0.6;
-      cursor: not-allowed;
-    }
+        .status-icon {
+            width: 24px;
+            height: 24px;
+            border-radius: 999px;
+            background: #94a3b8;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 0.8rem;
+        }
 
-    .review-box {
-      border: 1px solid #ddd;
-      padding: 12px;
-      border-radius: 4px;
-      min-height: 80px;
-      margin-bottom: 16px;
-      background: #fafafa;
-    }
+        .status-icon.ready {
+            background: #22c55e;
+        }
 
-    .result {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      font-size: 18px;
-      margin-top: 12px;
-    }
+        .status-icon.error {
+            background: #ef4444;
+        }
 
-    .result.positive {
-      color: #2e7d32;
-    }
+        .status-icon.loading {
+            background: #eab308;
+            animation: pulse 1.5s infinite;
+        }
 
-    .result.negative {
-      color: #c62828;
-    }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
 
-    .result.neutral {
-      color: #6d6d6d;
-    }
+        .review-container {
+            background: #f1f4f9;
+            border-radius: 24px;
+            padding: 1.5rem;
+            margin: 2rem 0 1.8rem;
+            border: 1px solid #d1d9e6;
+            box-shadow: inset 0 2px 4px rgba(0,0,0,0.02);
+        }
 
-    .status {
-      margin-top: 12px;
-      font-size: 14px;
-      color: #444;
-    }
+        .review-label {
+            text-transform: uppercase;
+            font-size: 0.75rem;
+            letter-spacing: 1px;
+            font-weight: 600;
+            color: #64748b;
+            margin-bottom: 0.6rem;
+        }
 
-    .error {
-      margin-top: 12px;
-      padding: 10px;
-      background: #fdecea;
-      color: #b71c1c;
-      border: 1px solid #f5c6cb;
-      border-radius: 4px;
-      display: none;
-    }
+        .review-text {
+            font-size: 1.3rem;
+            line-height: 1.6;
+            color: #0b1120;
+            font-weight: 450;
+            word-wrap: break-word;
+            white-space: pre-wrap;
+        }
 
-    .loading {
-      font-style: italic;
-    }
-  </style>
+        .review-text::before {
+            content: "“";
+            font-size: 2rem;
+            color: #94a3b8;
+            margin-right: 4px;
+        }
+        .review-text::after {
+            content: "”";
+            font-size: 2rem;
+            color: #94a3b8;
+            margin-left: 4px;
+            vertical-align: top;
+        }
+
+        .result-area {
+            display: flex;
+            align-items: center;
+            gap: 1.5rem;
+            background: white;
+            border-radius: 60px;
+            padding: 0.9rem 2rem;
+            margin: 1.5rem 0 2rem;
+            border: 2px solid #e2e8f0;
+            transition: border 0.2s, box-shadow 0.2s;
+        }
+
+        .result-icon {
+            font-size: 2.5rem;
+            min-width: 60px;
+            text-align: center;
+        }
+
+        .result-details {
+            flex: 1;
+        }
+
+        .sentiment-label {
+            font-size: 1.5rem;
+            font-weight: 700;
+            line-height: 1.2;
+        }
+
+        .confidence {
+            font-size: 1rem;
+            color: #334155;
+            opacity: 0.8;
+        }
+
+        .positive {
+            color: #16a34a;
+            border-color: #86efac;
+        }
+        .negative {
+            color: #dc2626;
+            border-color: #fca5a5;
+        }
+        .neutral {
+            color: #6b7280;
+            border-color: #cbd5e1;
+        }
+
+        .btn {
+            background: #0f172a;
+            color: white;
+            border: none;
+            padding: 1rem 2.5rem;
+            font-size: 1.2rem;
+            font-weight: 600;
+            border-radius: 60px;
+            cursor: pointer;
+            width: 100%;
+            transition: background 0.2s, transform 0.1s, box-shadow 0.2s;
+            box-shadow: 0 8px 16px -4px rgba(15, 23, 42, 0.2);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.75rem;
+        }
+
+        .btn:hover:not(:disabled) {
+            background: #1e293b;
+            transform: scale(1.01);
+            box-shadow: 0 12px 20px -8px #0f172a66;
+        }
+
+        .btn:disabled {
+            background: #94a3b8;
+            cursor: not-allowed;
+            opacity: 0.7;
+            box-shadow: none;
+        }
+
+        .error-message {
+            margin-top: 1.8rem;
+            background: #fee2e2;
+            border-left: 6px solid #ef4444;
+            padding: 1rem 1.5rem;
+            border-radius: 20px;
+            color: #7f1d1d;
+            font-weight: 500;
+            font-size: 0.95rem;
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .error-message i {
+            font-size: 1.4rem;
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        .footer-note {
+            margin-top: 2.2rem;
+            font-size: 0.8rem;
+            text-align: center;
+            color: #94a3b8;
+        }
+
+        .loading-spinner {
+            display: inline-block;
+            width: 18px;
+            height: 18px;
+            border: 3px solid #ffffff80;
+            border-radius: 50%;
+            border-top-color: white;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
 </head>
 <body>
-  <div class="container">
-    <h1>Random Review Sentiment Analyzer</h1>
+    <div class="card">
+        <h1>🍣 sentiment·tsv</h1>
+        <div class="subhead">random review · local transformer · 100% client‑side</div>
 
-    <button id="analyzeBtn">Analyze random review</button>
+        <!-- model / data status line -->
+        <div class="status-bar" id="statusBar">
+            <span class="status-icon" id="statusIcon">⏳</span>
+            <span id="statusMessage">initializing...</span>
+        </div>
 
-    <div id="reviewBox" class="review-box">
-      Click the button to analyze a random review.
+        <!-- review display -->
+        <div class="review-container">
+            <div class="review-label"><i class="fa-regular fa-note-sticky" style="margin-right: 6px;"></i>selected review</div>
+            <div class="review-text" id="reviewDisplay">—</div>
+        </div>
+
+        <!-- result area with icon + sentiment/confidence -->
+        <div class="result-area" id="resultArea">
+            <div class="result-icon" id="resultIcon"><i class="fa-regular fa-circle-question"></i></div>
+            <div class="result-details">
+                <div class="sentiment-label" id="sentimentLabel">waiting</div>
+                <div class="confidence" id="confidenceText">—</div>
+            </div>
+        </div>
+
+        <!-- main action button -->
+        <button class="btn" id="analyzeBtn" disabled>
+            <i class="fa-solid fa-shuffle"></i> analyze random review
+        </button>
+
+        <!-- error display area (hidden by default) -->
+        <div id="errorBox" class="error-message hidden">
+            <i class="fa-solid fa-circle-exclamation"></i>
+            <span id="errorText">error placeholder</span>
+        </div>
+
+        <div class="footer-note">
+            <i class="fa-regular fa-hard-drive"></i> model: distilbert-sst2 ·  <i class="fa-regular fa-file-lines"></i> reviews_test.tsv
+        </div>
     </div>
 
-    <div id="result" class="result" style="display: none;"></div>
-
-    <div id="status" class="status"></div>
-
-    <div id="error" class="error"></div>
-  </div>
-
-  <!-- Papa Parse for TSV parsing -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
-
-  <!-- Main application script -->
-  <script type="module" src="app.js"></script>
+    <script type="module" src="app.js"></script>
 </body>
 </html>
