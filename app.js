@@ -1,377 +1,308 @@
-import { pipeline } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.0.2/dist/transformers.min.js";
+import { pipeline } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.6/dist/transformers.min.js";
 
-// ===== ПОЛУЧАЕМ ЭЛЕМЕНТЫ =====
-const reviewBox = document.getElementById('reviewBox');
-const analyzeBtn = document.getElementById('analyzeBtn');
-const resultDiv = document.getElementById('result');
-const statusDiv = document.getElementById('status');
-const errorDiv = document.getElementById('error');
-const footerDiv = document.getElementById('footer');
+/* Google Apps Script Web App (/exec) */
+const GOOGLE_WEBAPP_URL =
+  "https://script.google.com/macros/s/AKfycbzdE1BRZOatG0tfEqe66aTMOhd0Qsjk5AZV7IQLy7tpapMJICoT3BeMKI5XnFPsSpVf/exec";
 
-// СОЗДАЕМ элемент для действий
-let actionDiv = document.getElementById('action-result');
-if (!actionDiv) {
-    actionDiv = document.createElement('div');
-    actionDiv.id = 'action-result';
-    actionDiv.style.margin = '20px 0';
-    if (resultDiv && resultDiv.parentNode) {
-        resultDiv.parentNode.insertBefore(actionDiv, resultDiv.nextSibling);
-    } else {
-        document.querySelector('.container').appendChild(actionDiv);
-    }
+/* TSV from GitHub RAW (change main -> master if needed) */
+const TSV_URL =
+  "https://raw.githubusercontent.com/pavelbakalenko-pixel/Pavel-B-DE/main/reviews_test.tsv";
+
+/* ---------------- DOM ---------------- */
+function getEl(id) { return document.getElementById(id); }
+
+var els = {
+  analyzeBtn: getEl("analyzeBtn"),
+  status: getEl("status"),
+  statusText: getEl("statusText"),
+  errorBox: getEl("errorBox"),
+  reviewDisplay: getEl("reviewDisplay"),
+  resultArea: getEl("resultArea"),
+  resultIcon: getEl("resultIcon"),
+  sentimentLabel: getEl("sentimentLabel"),
+  confidenceText: getEl("confidenceText"),
+  resultSubtext: getEl("resultSubtext"),
+  actionMessage: getEl("actionMessage")
+};
+
+/* ---------------- STATE ---------------- */
+var reviews = [];
+var model = null;
+var modelReady = false;
+var tsvReady = false;
+var isAnalyzing = false;
+
+/* ---------------- UI ---------------- */
+function setStatus(message, ready, error) {
+  if (els.statusText) els.statusText.textContent = message;
+
+  if (els.status) {
+    els.status.classList.remove("ready");
+    els.status.classList.remove("error");
+    if (ready === true) els.status.classList.add("ready");
+    if (error === true) els.status.classList.add("error");
+  }
 }
 
-// ===== ПЕРЕМЕННЫЕ =====
-let reviews = [];
-let model = null;
-let isModelReady = false;
-let isDataLoaded = false;
-
-// URL для логирования - ВАШ URL
-const SHEET_URL = 'https://script.google.com/macros/s/AKfycbzJIdc9WBWsIPUVGa_Ovcxu59LVyPEiRLjWhgywgJeph9FgVhetK3u61XV5Uoq-hk3a/exec';
-
-// ===== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ =====
-function updateStatus(text) {
-    console.log('📌', text);
-    if (statusDiv) statusDiv.textContent = text;
+function showError(message) {
+  console.error(message);
+  if (!els.errorBox) return;
+  els.errorBox.textContent = message;
+  els.errorBox.classList.add("show");
 }
 
-function showError(text) {
-    console.error('❌', text);
-    if (errorDiv) {
-        errorDiv.textContent = text;
-        errorDiv.style.display = 'block';
-    }
+function clearError() {
+  if (!els.errorBox) return;
+  els.errorBox.textContent = "";
+  els.errorBox.classList.remove("show");
 }
 
-function hideError() {
-    if (errorDiv) errorDiv.style.display = 'none';
+function updateOverallStatus() {
+  if (modelReady && tsvReady) {
+    setStatus("Ready. Click “Analyze random review”.", true, false);
+  } else if (modelReady && !tsvReady) {
+    setStatus("Model ready — waiting for TSV…", false, false);
+  } else if (!modelReady && tsvReady) {
+    setStatus("TSV ready — waiting for model…", false, false);
+  } else {
+    setStatus("Initializing… (loading TSV + model)", false, false);
+  }
 }
 
-function showResult(text, type) {
-    if (!resultDiv) return;
-    resultDiv.className = `result ${type}`;
-    resultDiv.innerHTML = text;
-    resultDiv.style.display = 'block';
+function updateButtonState() {
+  if (!els.analyzeBtn) return;
+  var enabled = modelReady && tsvReady && reviews.length > 0 && !isAnalyzing;
+  els.analyzeBtn.disabled = !enabled;
 }
 
-/**
- * ОПРЕДЕЛЕНИЕ БИЗНЕС-ДЕЙСТВИЯ (ТОЧНО ПО ЗАДАНИЮ)
- */
-function determineBusinessAction(confidence, label) {
-    console.log('🧠 Принимаем решение:', { label, confidence });
-    
-    // Нормализуем оценку в шкалу от 0 (плохо) до 1 (хорошо)
-    let normalizedScore = 0.5;
-    
-    if (label === "POSITIVE") {
-        normalizedScore = confidence; // 0.9 -> 0.9
-    } else if (label === "NEGATIVE") {
-        normalizedScore = 1.0 - confidence; // 0.9 негатива -> 0.1
-    }
-    
-    console.log('📊 Нормализованная оценка:', normalizedScore.toFixed(2));
-    
-    // Применяем пороговые значения ИЗ ЗАДАНИЯ
-    if (normalizedScore <= 0.4) {
-        return {
-            actionCode: "OFFER_COUPON",
-            uiMessage: "🚨 Нам искренне жаль! Пожалуйста, примите купон на 50% скидку.",
-            uiColor: "#ef4444",
-            icon: "fa-gift",
-            buttonText: "Получить купон",
-            bgColor: "#fee2e2"
-        };
-    } else if (normalizedScore < 0.7) {
-        return {
-            actionCode: "REQUEST_FEEDBACK",
-            uiMessage: "📝 Спасибо! Расскажите подробнее, как мы можем улучшить сервис?",
-            uiColor: "#6b7280",
-            icon: "fa-comment",
-            buttonText: "Оставить отзыв",
-            bgColor: "#f3f4f6"
-        };
-    } else {
-        return {
-            actionCode: "ASK_REFERRAL",
-            uiMessage: "⭐ Рады, что вам понравилось! Порекомендуйте нас друзьям и получите бонусы.",
-            uiColor: "#3b82f6",
-            icon: "fa-share-alt",
-            buttonText: "Пригласить друзей",
-            bgColor: "#dbeafe"
-        };
-    }
+function setAnalyzeButtonLoading(loading) {
+  if (!els.analyzeBtn) return;
+
+  isAnalyzing = loading;
+
+  if (loading) {
+    els.analyzeBtn.disabled = true;
+    els.analyzeBtn.innerHTML = '<span class="spinner"></span> Analyzing...';
+  } else {
+    els.analyzeBtn.innerHTML = '<i class="fa-solid fa-shuffle"></i> Analyze random review';
+    updateButtonState();
+  }
 }
 
-/**
- * ОТОБРАЖЕНИЕ ДЕЙСТВИЯ
- */
-function showAction(decision) {
-    if (!actionDiv) return;
-    
-    console.log('🎯 Показываем действие:', decision.actionCode);
-    
-    actionDiv.innerHTML = `
-        <div style="
-            background: ${decision.bgColor};
-            border: 2px solid ${decision.uiColor};
-            border-radius: 12px;
-            padding: 20px;
-            margin: 20px 0;
-            text-align: center;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-        ">
-            <i class="fas ${decision.icon}" style="
-                font-size: 48px;
-                color: ${decision.uiColor};
-                margin-bottom: 10px;
-            "></i>
-            <p style="
-                font-size: 18px;
-                color: #1f2937;
-                margin: 10px 0;
-                font-weight: 500;
-            ">${decision.uiMessage}</p>
-            <button onclick="alert('✅ ${decision.actionCode}')" style="
-                background: ${decision.uiColor};
-                color: white;
-                border: none;
-                padding: 12px 30px;
-                border-radius: 8px;
-                cursor: pointer;
-                font-size: 16px;
-                font-weight: 600;
-                margin-top: 10px;
-                transition: transform 0.2s;
-            " onmouseover="this.style.transform='scale(1.05)'" 
-               onmouseout="this.style.transform='scale(1)'">
-                ${decision.buttonText}
-            </button>
-        </div>
-    `;
-    
-    actionDiv.style.display = 'block';
+function updateResultUI(bucket, label, score) {
+  if (!els.resultArea) return;
+
+  els.resultArea.classList.remove("positive");
+  els.resultArea.classList.remove("negative");
+  els.resultArea.classList.remove("neutral");
+
+  var percent = "—";
+  if (typeof score === "number" && isFinite(score)) {
+    percent = (score * 100).toFixed(1);
+  }
+
+  if (bucket === "positive") {
+    els.resultArea.classList.add("positive");
+    if (els.resultIcon) els.resultIcon.innerHTML = '<i class="fa-solid fa-thumbs-up"></i>';
+  } else if (bucket === "negative") {
+    els.resultArea.classList.add("negative");
+    if (els.resultIcon) els.resultIcon.innerHTML = '<i class="fa-solid fa-thumbs-down"></i>';
+  } else {
+    els.resultArea.classList.add("neutral");
+    if (els.resultIcon) els.resultIcon.innerHTML = '<i class="fa-solid fa-question-circle"></i>';
+  }
+
+  if (els.sentimentLabel) els.sentimentLabel.textContent = label;
+  if (els.confidenceText) els.confidenceText.textContent = "(" + percent + "% confidence)";
+  if (els.resultSubtext) els.resultSubtext.textContent = "Analysis complete.";
 }
 
-// ===== ЗАГРУЗКА ДАННЫХ =====
-async function loadReviews() {
-    updateStatus('Загрузка отзывов...');
-    
-    try {
-        const response = await fetch('reviews_test.tsv');
-        
-        if (!response.ok) {
-            throw new Error('Файл не найден');
-        }
-        
-        const text = await response.text();
-        
-        const result = Papa.parse(text, {
-            header: true,
-            delimiter: '\t',
-            skipEmptyLines: true
-        });
-        
-        reviews = result.data
-            .map(row => row.text || Object.values(row)[0])
-            .filter(text => text && text.length > 10);
-        
-        if (reviews.length === 0) {
-            throw new Error('Нет отзывов');
-        }
-        
-        updateStatus(`Загружено ${reviews.length} отзывов`);
-        
-    } catch (error) {
-        console.warn('Ошибка загрузки:', error);
-        
-        reviews = [
-            "This product is amazing! I love it so much. Best purchase ever!",
-            "Terrible quality, broke after 2 days. Very disappointed.",
-            "It's okay, nothing special but works.",
-            "Absolutely fantastic! Best purchase ever.",
-            "Waste of money. Don't buy this.",
-            "Good value for the price, would recommend.",
-            "The worst experience I've ever had."
-        ];
-        
-        showError('Используются тестовые данные');
-        updateStatus(`Загружено ${reviews.length} тестовых отзывов`);
-    }
-    
-    isDataLoaded = true;
+function updateBusinessMessage(action) {
+  if (!els.actionMessage) return;
+
+  if (action === "OFFER_COUPON") {
+    els.actionMessage.textContent = "We’re sorry about your experience. Here’s a coupon to make it right.";
+    els.actionMessage.className = "action negative";
+  } else if (action === "UPSELL") {
+    els.actionMessage.textContent = "Glad you loved it! Check out our premium option.";
+    els.actionMessage.className = "action positive";
+  } else {
+    els.actionMessage.textContent = "Thanks for your feedback!";
+    els.actionMessage.className = "action neutral";
+  }
 }
 
-// ===== ЗАГРУЗКА МОДЕЛИ =====
-async function loadModel() {
-    updateStatus('Загрузка модели... (может занять минуту)');
-    
-    try {
-        model = await pipeline(
-            'text-classification',
-            'Xenova/distilbert-base-uncased-finetuned-sst-2-english',
-            { quantized: true }
-        );
-        
-        isModelReady = true;
-        updateStatus('Модель готова! ✅');
-        
-    } catch (error) {
-        console.error('Ошибка модели:', error);
-        
-        model = async (text) => {
-            const rand = Math.random();
-            if (rand > 0.6) return [{ label: 'POSITIVE', score: 0.95 }];
-            if (rand > 0.3) return [{ label: 'NEGATIVE', score: 0.9 }];
-            return [{ label: 'NEUTRAL', score: 0.6 }];
-        };
-        
-        isModelReady = true;
-        showError('Используется тестовая модель');
-        updateStatus('Тестовая модель готова ⚠️');
-    }
+/* ---------------- BUSINESS LOGIC ---------------- */
+function mapSentimentToAction(bucket) {
+  if (bucket === "negative") return "OFFER_COUPON";
+  if (bucket === "positive") return "UPSELL";
+  return "NO_ACTION";
 }
 
-// ===== ЛОГИРОВАНИЕ - УПРОЩЕННАЯ ВЕРСИЯ =====
-async function logToSheet(data) {
-    try {
-        console.log('📤 Отправляем данные:', data);
-        
-        // Создаем простые параметры
-        const params = new URLSearchParams();
-        params.append('timestamp', data.timestamp);
-        params.append('review', data.review);
-        params.append('sentiment', data.sentiment);
-        params.append('confidence', data.confidence);
-        params.append('action_taken', data.action_taken);
-        params.append('meta', JSON.stringify(data.meta));
-        
-        const url = SHEET_URL + '?' + params.toString();
-        console.log('📤 URL:', url);
-        
-        // Используем fetch с режимом no-cors
-        fetch(url, {
-            method: 'GET',
-            mode: 'no-cors'
-        }).catch(err => {
-            console.warn('Fetch error, пробуем Image:', err);
-            // Если fetch не работает, пробуем Image
-            const img = new Image();
-            img.src = url;
-        });
-        
-        if (footerDiv) {
-            footerDiv.innerHTML = '✅ Данные отправлены';
-            footerDiv.style.color = '#4caf50';
-        }
-        
-    } catch (error) {
-        console.error('❌ Ошибка логирования:', error);
-        if (footerDiv) {
-            footerDiv.innerHTML = '⚠️ Ошибка сохранения';
-            footerDiv.style.color = '#f44336';
-        }
-    }
+/* ---------------- LOGGING (CORS-free GET beacon) ---------------- */
+function sendLogToGoogleSheets(payload) {
+  try {
+    if (!GOOGLE_WEBAPP_URL) return;
+
+    // Keep payload small (URL limits)
+    payload.review = String(payload.review || "").slice(0, 800);
+    payload.sentiment = String(payload.sentiment || "").slice(0, 80);
+    payload.meta = String(payload.meta || "").slice(0, 800);
+    payload.action_taken = String(payload.action_taken || "").slice(0, 40);
+
+    var encoded = encodeURIComponent(JSON.stringify(payload));
+    var img = new Image();
+    img.src = GOOGLE_WEBAPP_URL + "?data=" + encoded + "&_=" + Date.now();
+  } catch (err) {
+    console.warn("Log failed:", err);
+  }
 }
 
-// ===== АНАЛИЗ =====
-async function analyze() {
-    hideError();
-    
-    if (!isDataLoaded || reviews.length === 0) {
-        showError('Нет отзывов для анализа');
-        return;
-    }
-    
-    if (!isModelReady || !model) {
-        showError('Модель ещё не готова');
-        return;
-    }
-    
-    analyzeBtn.disabled = true;
-    actionDiv.style.display = 'none';
-    
-    try {
-        const randomIndex = Math.floor(Math.random() * reviews.length);
-        const review = reviews[randomIndex];
-        
-        reviewBox.textContent = review;
-        updateStatus('Анализ...');
-        
-        const result = await model(review);
-        const sentiment = result[0];
-        
-        let type = 'neutral';
-        let icon = 'fa-question-circle';
-        let text = 'NEUTRAL';
-        
-        if (sentiment.label === 'POSITIVE' && sentiment.score > 0.5) {
-            type = 'positive';
-            icon = 'fa-thumbs-up';
-            text = 'POSITIVE';
-        } else if (sentiment.label === 'NEGATIVE' && sentiment.score > 0.5) {
-            type = 'negative';
-            icon = 'fa-thumbs-down';
-            text = 'NEGATIVE';
-        }
-        
-        const confidence = (sentiment.score * 100).toFixed(1);
-        
-        // Показываем результат анализа
-        showResult(`
-            <i class="fas ${icon}" style="font-size: 24px; margin-right: 10px;"></i>
-            <strong>${text}</strong> (${confidence}% confidence)
-        `, type);
-        
-        // Принимаем бизнес-решение
-        const decision = determineBusinessAction(sentiment.score, sentiment.label);
-        console.log('✅ Решение:', decision.actionCode);
-        
-        // Показываем действие
-        showAction(decision);
-        
-        updateStatus('Анализ завершён');
-        
-        // Логируем с action_taken
-        const meta = {
-            userAgent: navigator.userAgent,
-            language: navigator.language,
-            screen: `${window.screen.width}x${window.screen.height}`,
-            url: window.location.href,
-            reviewsCount: reviews.length
-        };
-        
-        await logToSheet({
-            timestamp: new Date().toISOString(),
-            review: review.substring(0, 300),
-            sentiment: text,
-            confidence: confidence,
-            action_taken: decision.actionCode,
-            meta: meta
-        });
-        
-    } catch (error) {
-        console.error('Ошибка:', error);
-        showError('Ошибка при анализе');
-        updateStatus('Ошибка');
-        
-    } finally {
-        analyzeBtn.disabled = false;
-    }
+function buildMeta() {
+  var metaObj = {
+    ua: navigator.userAgent,
+    page: location.href,
+    screen: window.innerWidth + "x" + window.innerHeight,
+    t: Date.now()
+  };
+  return JSON.stringify(metaObj);
 }
 
-// ===== ЗАПУСК =====
-document.addEventListener('DOMContentLoaded', async () => {
-    console.log('🚀 Запуск приложения');
-    updateStatus('Инициализация...');
-    
-    await loadReviews();
-    await loadModel();
-    
-    if (analyzeBtn) {
-        analyzeBtn.addEventListener('click', analyze);
-    }
-    
-    updateStatus('Готово! Нажмите кнопку для анализа');
-    if (footerDiv) footerDiv.innerHTML = '📊 Бизнес-логика активна';
+/* ---------------- TSV ---------------- */
+async function loadReviewsTSV() {
+  var res = await fetch(TSV_URL, { cache: "no-store" });
+  if (!res.ok) throw new Error("Cannot fetch TSV (HTTP " + res.status + ")");
+
+  var text = await res.text();
+
+  var parsed = await new Promise(function(resolve, reject) {
+    Papa.parse(text, {
+      header: true,
+      delimiter: "\t",
+      skipEmptyLines: true,
+      complete: resolve,
+      error: reject
+    });
+  });
+
+  reviews = parsed.data
+    .map(function(r) { return r && r.text; })
+    .filter(function(v) { return typeof v === "string" && v.trim().length > 0; })
+    .map(function(v) { return v.trim(); });
+
+  if (reviews.length === 0) throw new Error('No valid rows found in TSV column "text".');
+
+  tsvReady = true;
+}
+
+/* ---------------- MODEL ---------------- */
+async function initModel() {
+  model = await pipeline(
+    "text-classification",
+    "Xenova/distilbert-base-uncased-finetuned-sst-2-english",
+    { dtype: "q8" }
+  );
+  modelReady = true;
+}
+
+/* ---------------- INFERENCE HELPERS ---------------- */
+function bucketize(label, score) {
+  if (label === "POSITIVE" && score > 0.5) return "positive";
+  if (label === "NEGATIVE" && score > 0.5) return "negative";
+  return "neutral";
+}
+
+/* ---------------- MAIN FLOW ---------------- */
+async function analyzeRandomReview() {
+  clearError();
+
+  if (!tsvReady || reviews.length === 0) {
+    showError("TSV not ready.");
+    return;
+  }
+  if (!modelReady || !model) {
+    showError("Model not ready.");
+    return;
+  }
+  if (isAnalyzing) return;
+
+  var review = reviews[Math.floor(Math.random() * reviews.length)];
+  if (els.reviewDisplay) els.reviewDisplay.textContent = review;
+
+  setAnalyzeButtonLoading(true);
+  if (els.resultSubtext) els.resultSubtext.textContent = "Running inference...";
+
+  try {
+    var output = await model(review);
+    if (!output || !output[0]) throw new Error("Unexpected model output");
+
+    var label = String(output[0].label || "").toUpperCase();
+    var score = Number(output[0].score);
+
+    var bucket = bucketize(label, score);
+
+    // 1) UI sentiment result
+    updateResultUI(bucket, label, score);
+
+    // 2) Decision maker: sentiment -> action
+    var actionTaken = mapSentimentToAction(bucket);
+
+    // 3) UI business message
+    updateBusinessMessage(actionTaken);
+
+    // 4) Enhanced logging: required columns
+    var payload = {
+      ts_iso: new Date().toISOString(),
+      review: review,
+      sentiment: label + " (" + (score * 100).toFixed(1) + "%)",
+      meta: buildMeta(),
+      action_taken: actionTaken
+    };
+
+    sendLogToGoogleSheets(payload);
+  } catch (err) {
+    showError("Analysis failed: " + (err && err.message ? err.message : String(err)));
+  } finally {
+    setAnalyzeButtonLoading(false);
+    updateButtonState();
+  }
+}
+
+/* ---------------- STARTUP ---------------- */
+window.addEventListener("DOMContentLoaded", function() {
+  setStatus("Initializing…", false, false);
+  updateOverallStatus();
+  updateButtonState();
+
+  if (els.analyzeBtn) els.analyzeBtn.addEventListener("click", analyzeRandomReview);
+
+  loadReviewsTSV()
+    .then(function() {
+      setStatus("TSV ready: " + reviews.length + " reviews loaded", false, false);
+      updateOverallStatus();
+      updateButtonState();
+    })
+    .catch(function(err) {
+      tsvReady = false;
+      reviews = [];
+      showError("TSV error: " + (err && err.message ? err.message : String(err)));
+      setStatus("TSV failed", false, true);
+      updateOverallStatus();
+      updateButtonState();
+    });
+
+  initModel()
+    .then(function() {
+      setStatus("Model ready", true, false);
+      updateOverallStatus();
+      updateButtonState();
+    })
+    .catch(function(err) {
+      modelReady = false;
+      model = null;
+      showError("Model error: " + (err && err.message ? err.message : String(err)));
+      setStatus("Model failed", false, true);
+      updateOverallStatus();
+      updateButtonState();
+    });
 });
